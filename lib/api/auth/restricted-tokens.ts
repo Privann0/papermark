@@ -1,2 +1,2 @@
-→ export const withRestrictedTokens = (fn: any) => fn
-→ export default {}
+export const withRestrictedTokens = (fn: any) => fn
+export default {}
