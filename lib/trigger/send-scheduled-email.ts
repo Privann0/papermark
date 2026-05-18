@@ -1,2 +1,2 @@
-→ export const sendScheduledEmail = async () => {}
-→ export default {}
+export const sendScheduledEmail = async () => {}
+export default {}
