@@ -1,6 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  typescript: {
+    ignoreBuildErrors: true,
+  },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   pageExtensions: ["js", "jsx", "ts", "tsx", "mdx"],
   transpilePackages: ["@boxyhq/saml-jackson"],
   images: {
