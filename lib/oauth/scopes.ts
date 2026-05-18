@@ -1,2 +1,2 @@
-→ export const SCOPES = {}
-→ export default {}
+export const SCOPES = {}
+export default {}
