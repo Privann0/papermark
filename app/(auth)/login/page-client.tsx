@@ -100,7 +100,7 @@ export default function Login() {
               signIn("email", {
                 email: emailValidation.data,
                 redirect: false,
-                ...(next && next.length > 0 ? { callbackUrl: next } : {}),
+                ...callbackUrl: searchParams?.get("next") || "/dashboard",
               }).then((res) => {
                 if (res?.ok && !res?.error) {
                   setLastUsed("credentials");
@@ -166,7 +166,7 @@ export default function Login() {
                   setClickedMethod("google");
                   setLastUsed("google");
                   signIn("google", {
-                    ...(next && next.length > 0 ? { callbackUrl: next } : {}),
+                    ...callbackUrl: searchParams?.get("next") || "/dashboard",
                   }).then((res) => {
                     setClickedMethod(undefined);
                   });
@@ -188,7 +188,7 @@ export default function Login() {
                   setClickedMethod("linkedin");
                   setLastUsed("linkedin");
                   signIn("linkedin", {
-                    ...(next && next.length > 0 ? { callbackUrl: next } : {}),
+                    ...callbackUrl: searchParams?.get("next") || "/dashboard",
                   }).then((res) => {
                     setClickedMethod(undefined);
                   });
