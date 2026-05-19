@@ -78,7 +78,7 @@ export default function EmailVerificationClient() {
 
       // Redirect to the callback URL
       if (data.callbackUrl) {
-        router.push(data.callbackUrl);
+        window.location.href = data.callbackUrl;
       } else {
         // No callback URL in response - stop loading and show error
         setIsLoading(false);
