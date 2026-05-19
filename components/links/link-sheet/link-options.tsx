@@ -83,6 +83,7 @@ export const LinkOptions = ({
   linkType,
   editLink,
   currentPreset = null,
+  setValidationError,
 }: {
   data: DEFAULT_LINK_TYPE;
   setData: React.Dispatch<React.SetStateAction<DEFAULT_LINK_TYPE>>;
@@ -90,6 +91,7 @@ export const LinkOptions = ({
   linkType: Omit<LinkType, "WORKFLOW_LINK">;
   editLink?: boolean;
   currentPreset?: LinkPreset | null;
+  setValidationError?: (key: string, errors: string[]) => void;
 }) => {
   const {
     isStarter,
@@ -157,6 +159,7 @@ export const LinkOptions = ({
             }
             handleUpgradeStateChange={handleUpgradeStateChange}
             presets={currentPreset}
+            setValidationError={setValidationError}
           />
           <DenyListSection
             key={`deny-list-${data.id ?? "new"}`}
@@ -170,6 +173,7 @@ export const LinkOptions = ({
             }
             handleUpgradeStateChange={handleUpgradeStateChange}
             presets={currentPreset}
+            setValidationError={setValidationError}
           />
         </>
       ) : null}

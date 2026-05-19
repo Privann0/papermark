@@ -1,7 +1,15 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
 
-import { Dispatch, SetStateAction, useEffect, useRef, useState } from "react";
+import {
+  Dispatch,
+  SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { useTeam } from "@/context/team-context";
 import { PlanEnum } from "@/ee/stripe/constants";
@@ -192,7 +200,52 @@ export default function LinkSheet({
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [currentPreset, setCurrentPreset] = useState<LinkPreset | null>(null);
+  const [validationErrors, setValidationErrors] = useState<
+    Record<string, string[]>
+  >({});
   const formRef = useRef<HTMLFormElement>(null);
+
+  const setValidationError = useCallback(
+    (key: string, errors: string[]) => {
+      setValidationErrors((prev) => {
+        const hasErrors = errors.length > 0;
+        const wasPresent = key in prev;
+        if (!hasErrors && !wasPresent) return prev;
+        if (!hasErrors && wasPresent) {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        }
+        const previous = prev[key];
+        if (
+          previous &&
+          previous.length === errors.length &&
+          previous.every((value, index) => value === errors[index])
+        ) {
+          return prev;
+        }
+        return { ...prev, [key]: errors };
+      });
+    },
+    [],
+  );
+
+  const validationErrorEntries = useMemo(
+    () =>
+      Object.entries(validationErrors).filter(([, errors]) => errors.length > 0),
+    [validationErrors],
+  );
+  const hasValidationErrors = validationErrorEntries.length > 0;
+
+  const validationErrorLabel = useMemo(() => {
+    const labels: Record<string, string> = {
+      allowList: "Allow specified viewers",
+      denyList: "Block specified viewers",
+    };
+    return validationErrorEntries
+      .map(([key]) => labels[key] ?? key)
+      .join(", ");
+  }, [validationErrorEntries]);
 
   const isPresetsAllowed =
     isTrial ||
@@ -221,12 +274,15 @@ export default function LinkSheet({
     "mod+enter",
     (e) => {
       e.preventDefault();
-      if (!isSaving && formRef.current) {
+      if (!isSaving && !hasValidationErrors && formRef.current) {
         formRef.current.requestSubmit();
       }
     },
-    { enabled: isOpen, enableOnFormTags: true },
-    [isSaving],
+    {
+      enabled: isOpen && !hasValidationErrors,
+      enableOnFormTags: true,
+    },
+    [isSaving, hasValidationErrors],
   );
 
   const handlePreviewLink = async (link: LinkWithViews) => {
@@ -311,6 +367,13 @@ export default function LinkSheet({
 
     if (!targetId) {
       toast.error("Missing document or dataroom");
+      return;
+    }
+
+    if (hasValidationErrors) {
+      toast.error(
+        `Fix invalid emails or domains in: ${validationErrorLabel}`,
+      );
       return;
     }
 
@@ -732,6 +795,7 @@ export default function LinkSheet({
                           linkType={linkType}
                           editLink={!!currentLink}
                           currentPreset={currentPreset}
+                          setValidationError={setValidationError}
                         />
                       </div>
                     </TabsContent>
@@ -882,6 +946,7 @@ export default function LinkSheet({
                           linkType={linkType}
                           editLink={!!currentLink}
                           currentPreset={currentPreset}
+                          setValidationError={setValidationError}
                         />
                       </div>
                     </TabsContent>
@@ -901,22 +966,31 @@ export default function LinkSheet({
           </ScrollArea>
 
           <SheetFooter>
-            <div className="flex flex-row-reverse items-center gap-2 pt-2">
-              <Button
-                type="submit"
-                loading={isSaving}
-                onClick={(e) => handleSubmit(e, false)}
-              >
-                {currentLink ? "Update Link" : "Save Link"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                loading={isLoading}
-                onClick={(e) => handleSubmit(e, true)}
-              >
-                {currentLink ? "Update & Preview" : "Save & Preview"}
-              </Button>
+            <div className="flex flex-col gap-2 pt-2">
+              {hasValidationErrors ? (
+                <p className="text-right text-xs text-destructive">
+                  Fix invalid emails or domains in: {validationErrorLabel}
+                </p>
+              ) : null}
+              <div className="flex flex-row-reverse items-center gap-2">
+                <Button
+                  type="submit"
+                  loading={isSaving}
+                  disabled={hasValidationErrors}
+                  onClick={(e) => handleSubmit(e, false)}
+                >
+                  {currentLink ? "Update Link" : "Save Link"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  loading={isLoading}
+                  disabled={hasValidationErrors}
+                  onClick={(e) => handleSubmit(e, true)}
+                >
+                  {currentLink ? "Update & Preview" : "Save & Preview"}
+                </Button>
+              </div>
             </div>
           </SheetFooter>
         </form>
