@@ -38,7 +38,6 @@ export const sendEmail = async ({
   unsubscribeUrl?: string;
 }) => {
   if (!resend) {
-    // Throw an error if resend is not initialized
     throw new Error("Resend not initialized");
   }
 
@@ -48,21 +47,21 @@ export const sendEmail = async ({
   const fromAddress =
     from ??
     (marketing
-      ? "Marc from Papermark <marc@updates.papermark.com>"
+      ? "JETT <noreply@jett.city>"
       : system
-        ? "Papermark <system@papermark.com>"
+        ? "JETT <noreply@jett.city>"
         : verify
-          ? "Papermark <system@verify.papermark.com>"
+          ? "JETT <noreply@jett.city>"
           : !!scheduledAt
-            ? "Marc Seitz <marc@papermark.com>"
-            : "Marc from Papermark <marc@papermark.com>");
+            ? "JETT <noreply@jett.city>"
+            : "JETT <noreply@jett.city>");
 
   try {
     const { data, error } = await resend.emails.send({
       from: fromAddress,
       to: test ? "delivered@resend.dev" : to,
       cc: cc,
-      replyTo: marketing ? "marc@papermark.com" : replyTo,
+      replyTo: marketing ? "noreply@jett.city" : replyTo,
       subject,
       react,
       scheduledAt,
@@ -78,7 +77,6 @@ export const sendEmail = async ({
       },
     });
 
-    // Check if the email sending operation returned an error and throw it
     if (error) {
       log({
         message: `Resend returned error when sending email: ${error.name} \n\n ${error.message}`,
@@ -88,16 +86,14 @@ export const sendEmail = async ({
       throw error;
     }
 
-    // If there's no error, return the data
     return data;
   } catch (exception) {
-    // Log and rethrow any caught exceptions for upstream handling
     log({
       message: `Unexpected error when sending email: ${exception}`,
       type: "error",
       mention: true,
     });
-    throw exception; // Rethrow the caught exception
+    throw exception;
   }
 };
 
