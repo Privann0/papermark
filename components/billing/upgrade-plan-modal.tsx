@@ -167,6 +167,7 @@ export function UpgradePlanModal({
   open,
   setOpen,
   highlightItem,
+  hideItems,
   children,
 }: {
   clickedPlan: PlanEnum;
@@ -174,6 +175,10 @@ export function UpgradePlanModal({
   open?: boolean;
   setOpen?: React.Dispatch<React.SetStateAction<boolean>>;
   highlightItem?: string[];
+  /** Feature ids (or `aliasIds`) to omit from every plan card's feature list.
+   *  Use this when the upsell is about a specific feature and a generic line
+   *  (e.g. "Unlimited data rooms") would distract from the message. */
+  hideItems?: string[];
   children?: React.ReactNode;
 }) {
   const router = useRouter();
@@ -484,7 +489,20 @@ export function UpgradePlanModal({
                 </p>
 
                 <ul className="mb-6 mt-2 space-y-2 text-sm leading-6 text-gray-600 dark:text-gray-300">
-                  {planFeatures.features.map((feature, i) => {
+                  {planFeatures.features
+                    .filter((feature) => {
+                      if (!hideItems?.length) return true;
+                      if (hideItems.includes(feature.id)) return false;
+                      if (
+                        feature.aliasIds?.some((alias) =>
+                          hideItems.includes(alias),
+                        )
+                      ) {
+                        return false;
+                      }
+                      return true;
+                    })
+                    .map((feature, i) => {
                     const isDataRoomPlan =
                       effectivePlan === PlanEnum.DataRooms ||
                       effectivePlan === PlanEnum.DataRoomsPlus ||
@@ -494,7 +512,12 @@ export function UpgradePlanModal({
                         <FeatureItem
                           feature={{
                             ...feature,
-                            isHighlighted: feature.isHighlighted || highlightItem?.includes(feature.id),
+                            isHighlighted:
+                              feature.isHighlighted ||
+                              highlightItem?.includes(feature.id) ||
+                              feature.aliasIds?.some((alias) =>
+                                highlightItem?.includes(alias),
+                              ),
                           }}
                           onUnlimitedClick={
                             feature.isUsers && isDataRoomPlan

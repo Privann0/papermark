@@ -39,7 +39,8 @@ const UpgradePlanEmail = ({
   const planTypeText = PLAN_TYPE_MAP[planType as keyof typeof PLAN_TYPE_MAP];
   const features: any = {
     pro: [
-      "Custom branding",
+      "Remove Papermark branding",
+      "Custom logo, colors & accents",
       "Unlimited link views",
       "Folder organization",
       "1 team member",

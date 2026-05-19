@@ -64,8 +64,8 @@ export function IntroductionInfoButton() {
             onClick={openIntroduction}
             className={`inline-flex items-center justify-center rounded-full p-1.5 transition-colors ${
               hasSeen
-                ? "text-muted-foreground hover:bg-muted hover:text-foreground"
-                : "border-2 border-gray-900 text-gray-900 hover:bg-gray-100 dark:border-white dark:text-white dark:hover:bg-gray-800"
+                ? "text-[var(--viewer-muted-text)] hover:bg-[var(--viewer-panel-bg-hover)] hover:text-[var(--viewer-text)]"
+                : "border-2 border-[var(--viewer-control-border-strong)] text-[var(--viewer-text)] hover:bg-[var(--viewer-panel-bg-hover)]"
             }`}
             aria-label="View introduction"
           >

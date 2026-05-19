@@ -1,19 +1,25 @@
 import { useFeatureFlags } from "@/lib/hooks/use-feature-flags";
 import { usePlan } from "@/lib/swr/use-billing";
 
-export function useDataroomIndexEnabled(): boolean {
+/**
+ * Admin-side gate for showing hierarchical index prefixes.
+ * Mirrors the viewer rule in `lib/featureFlags/dataroom-index-viewer.ts` and
+ * the API gate in `pages/api/teams/[teamId]/datarooms/[id]/calculate-indexes.ts`:
+ * Edge Config `dataroomIndex` flag OR Datarooms-Plus tier (incl. premium/unlimited).
+ */
+export function useDataroomIndexDisplayEnabled(): boolean {
   const { isFeatureEnabled } = useFeatureFlags();
   const { isDataroomsPlus } = usePlan();
-  return isDataroomsPlus || isFeatureEnabled("dataroomIndex");
+  return isFeatureEnabled("dataroomIndex") || isDataroomsPlus;
 }
 
 export function useHierarchicalDisplayName(
   name: string,
   hierarchicalIndex?: string | null,
 ): string {
-  const isEnabled = useDataroomIndexEnabled();
+  const enabled = useDataroomIndexDisplayEnabled();
 
-  if (isEnabled && hierarchicalIndex) {
+  if (enabled && hierarchicalIndex) {
     return `${hierarchicalIndex} ${name}`;
   }
 

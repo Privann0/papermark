@@ -47,8 +47,8 @@ model Team {
   // Populated when a trial is manually extended via the admin script.
   trialStartedAt     DateTime? // When the trial actually started
   trialEndsAt        DateTime? // Authoritative trial end timestamp (null = use legacy 7d-from-creation)
-  trialReminderRunId String?   // Trigger.dev run id for the 24h reminder email
-  trialExpiredRunId  String?   // Trigger.dev run id for the trial-expired task
+  trialReminderRunId String? // Trigger.dev run id for the 24h reminder email
+  trialExpiredRunId  String? // Trigger.dev run id for the trial-expired task
 
   limits Json? // Plan limits // {datarooms: 1, users: 1, domains: 1, customDomainOnPro: boolean, customDomainInDataroom: boolean}
 

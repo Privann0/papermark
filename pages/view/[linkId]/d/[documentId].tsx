@@ -229,7 +229,7 @@ export async function getStaticProps(context: GetStaticPropsContext) {
       return { notFound: true };
     }
 
-    const { linkType, link, brand } = result;
+    const { linkType, link, brand, publicMeta } = result;
 
     if (!link || !linkType) {
       return { notFound: true };
@@ -297,11 +297,11 @@ export async function getStaticProps(context: GetStaticPropsContext) {
           theme,
         },
         meta: {
-          enableCustomMetatag: link.enableCustomMetatag || false,
-          metaTitle: link.metaTitle,
-          metaDescription: link.metaDescription,
-          metaImage: link.metaImage,
-          metaFavicon: link.metaFavicon ?? "/favicon.ico",
+          enableCustomMetatag: publicMeta.enableCustomMetatag,
+          metaTitle: publicMeta.metaTitle,
+          metaDescription: publicMeta.metaDescription,
+          metaImage: publicMeta.metaImage,
+          metaFavicon: publicMeta.metaFavicon,
           metaUrl: `https://www.papermark.com/view/${linkId}`,
         },
         showPoweredByBanner: false,

@@ -229,17 +229,39 @@ export default async function handle(
           folders: {
             create: [],
           },
-          brand: {
-            create: {
-              banner: dataroomContents.brand?.banner,
-              logo: dataroomContents.brand?.logo,
-              accentColor: dataroomContents.brand?.accentColor,
-              applyAccentColorToDataroomView:
-                (dataroomContents.brand as any)?.applyAccentColorToDataroomView ??
-                false,
-              brandColor: dataroomContents.brand?.brandColor,
-            },
-          },
+          brand: dataroomContents.brand
+            ? {
+                create: {
+                  logo: dataroomContents.brand.logo,
+                  banner: dataroomContents.brand.banner,
+                  brandColor: dataroomContents.brand.brandColor,
+                  accentColor: dataroomContents.brand.accentColor,
+                  accentButtonColor: dataroomContents.brand.accentButtonColor,
+                  applyAccentColorToDataroomView:
+                    dataroomContents.brand.applyAccentColorToDataroomView ??
+                    false,
+                  welcomeMessage: dataroomContents.brand.welcomeMessage,
+                  cardLayout: dataroomContents.brand.cardLayout ?? undefined,
+                  showFolderTree:
+                    dataroomContents.brand.showFolderTree ?? undefined,
+                  viewerLayoutPreset:
+                    dataroomContents.brand.viewerLayoutPreset ?? undefined,
+                  viewerHeaderStyle:
+                    dataroomContents.brand.viewerHeaderStyle ?? undefined,
+                  hideFolderIconsInMain:
+                    dataroomContents.brand.hideFolderIconsInMain ?? undefined,
+                  ctaLabel: dataroomContents.brand.ctaLabel,
+                  ctaUrl: dataroomContents.brand.ctaUrl,
+                  customLinkPreviewEnabled:
+                    dataroomContents.brand.customLinkPreviewEnabled ?? false,
+                  linkPreviewTitle: dataroomContents.brand.linkPreviewTitle,
+                  linkPreviewDescription:
+                    dataroomContents.brand.linkPreviewDescription,
+                  linkPreviewImage: dataroomContents.brand.linkPreviewImage,
+                  linkPreviewFavicon: dataroomContents.brand.linkPreviewFavicon,
+                },
+              }
+            : undefined,
         },
       });
 

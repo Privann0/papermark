@@ -233,7 +233,14 @@ export const LinkOptions = ({
       {/* Custom Branding Section */}
       <CollapsibleSection title="Custom Branding" defaultOpen={true}>
         <div>
-          <WelcomeMessageSection {...{ data, setData }} />
+          <WelcomeMessageSection
+            data={data}
+            setData={setData}
+            isAllowed={
+              isTrial || isBusiness || isDatarooms || isDataroomsPlus
+            }
+            handleUpgradeStateChange={handleUpgradeStateChange}
+          />
           <OGSection
             {...{ data, setData }}
             isAllowed={

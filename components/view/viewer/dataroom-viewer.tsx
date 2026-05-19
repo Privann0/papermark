@@ -15,6 +15,13 @@ import {
   PermissionGroupAccessControls,
   ViewerGroupAccessControls,
 } from "@prisma/client";
+
+import {
+  asDataroomCardLayout,
+  asDataroomViewerHeaderStyle,
+  type DataroomCardLayout,
+  type DataroomViewerHeaderStyle,
+} from "@/ee/features/branding/lib/dataroom-viewer-layout";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { PanelLeftIcon, UploadIcon, XIcon } from "lucide-react";
 
@@ -36,7 +43,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import {
   Sheet,
   SheetOverlay,
@@ -46,13 +52,20 @@ import {
 
 import { DEFAULT_DATAROOM_VIEW_TYPE } from "../dataroom/dataroom-view";
 import DocumentCard from "../dataroom/document-card";
+import { DataroomNoBannerTitle } from "../dataroom/dataroom-no-banner-title";
 import { DocumentUploadModal } from "../dataroom/document-upload-modal";
+import {
+  DataroomTrailingActions,
+  VIEWER_OPEN_DOWNLOAD_EVENT,
+  VIEWER_TOGGLE_CONVERSATIONS_EVENT,
+} from "../dataroom/dataroom-trailing-actions";
 import FolderCard from "../dataroom/folder-card";
 import IndexFileDialog from "../dataroom/index-file-dialog";
 import {
   IntroductionInfoButton,
   IntroductionProvider,
 } from "../dataroom/introduction-modal";
+import { CompactDataroomListHeader } from "../dataroom/compact-dataroom-list-header";
 import DataroomNav from "../dataroom/nav-dataroom";
 import PendingDocumentCard from "../dataroom/pending-document-card";
 import {
@@ -80,7 +93,7 @@ const ViewerBreadcrumbItem = ({
   if (isLast) {
     return (
       <BreadcrumbPage
-        className="capitalize text-[var(--viewer-text)]"
+        className="font-medium capitalize text-[var(--viewer-text)]"
         style={HIERARCHICAL_DISPLAY_STYLE}
       >
         {displayName}
@@ -91,7 +104,7 @@ const ViewerBreadcrumbItem = ({
   return (
     <BreadcrumbLink
       onClick={() => setFolderId(folder.id)}
-      className="cursor-pointer capitalize text-[var(--viewer-muted-text)] hover:text-[var(--viewer-text)]"
+      className="-mx-1.5 cursor-pointer rounded-md px-1.5 py-0.5 capitalize text-[var(--viewer-muted-text)] transition-colors hover:bg-[var(--viewer-panel-bg-hover)] hover:text-[var(--viewer-text)]"
       style={HIERARCHICAL_DISPLAY_STYLE}
     >
       {displayName}
@@ -110,6 +123,7 @@ export type DocumentVersion = {
   hasPages: boolean;
   isVertical: boolean;
   updatedAt: Date;
+  fileSize?: number | bigint | null;
 };
 
 type DataroomDocument = {
@@ -124,6 +138,24 @@ type DataroomDocument = {
   canView: boolean;
   hierarchicalIndex: string | null;
 };
+
+type GridRun = { kind: "folder" | "document"; items: FolderOrDocument[] };
+
+/** Preserve sort order but split into runs so folder vs document grids can differ. */
+function segmentMixedItemsForGrid(items: FolderOrDocument[]): GridRun[] {
+  const segments: GridRun[] = [];
+  for (const item of items) {
+    const kind: "folder" | "document" =
+      "versions" in item ? "document" : "folder";
+    const last = segments[segments.length - 1];
+    if (last?.kind === kind) {
+      last.items.push(item);
+    } else {
+      segments.push({ kind, items: [item] });
+    }
+  }
+  return segments;
+}
 
 const getParentFolders = (
   folderId: string | null,
@@ -158,6 +190,7 @@ export default function DataroomViewer({
   isEmbedded,
   viewerEmail,
   dataroomIndexEnabled,
+  showPoweredByBanner,
 }: {
   brand: Partial<DataroomBrand>;
   viewId?: string;
@@ -174,6 +207,7 @@ export default function DataroomViewer({
   isEmbedded?: boolean;
   viewerEmail?: string;
   dataroomIndexEnabled?: boolean;
+  showPoweredByBanner?: boolean;
 }) {
   const { documents, folders, allowBulkDownload } = dataroom as {
     documents: DataroomDocument[];
@@ -202,6 +236,40 @@ export default function DataroomViewer({
   const breadcrumbFolders = useMemo(
     () => getParentFolders(folderId, folders),
     [folderId, folders],
+  );
+
+  const toolbarBreadcrumbEl = useMemo(
+    () => (
+      <Breadcrumb>
+        <BreadcrumbList className="text-[var(--viewer-muted-text)]">
+          <BreadcrumbItem key="root">
+            <BreadcrumbLink
+              onClick={() => setFolderId(null)}
+              className="-mx-1.5 cursor-pointer rounded-md px-1.5 py-0.5 text-[var(--viewer-muted-text)] transition-colors hover:bg-[var(--viewer-panel-bg-hover)] hover:text-[var(--viewer-text)]"
+            >
+              Home
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+
+          {breadcrumbFolders.map((folder, index) => (
+            <React.Fragment key={folder.id}>
+              <BreadcrumbSeparator
+                className="text-[var(--viewer-subtle-text)]"
+              />
+              <BreadcrumbItem>
+                <ViewerBreadcrumbItem
+                  folder={folder}
+                  setFolderId={setFolderId}
+                  isLast={index === breadcrumbFolders.length - 1}
+                  dataroomIndexEnabled={dataroomIndexEnabled}
+                />
+              </BreadcrumbItem>
+            </React.Fragment>
+          ))}
+        </BreadcrumbList>
+      </Breadcrumb>
+    ),
+    [breadcrumbFolders, dataroomIndexEnabled, setFolderId],
   );
 
   // Index access controls by `itemId` once per change so the per-document
@@ -353,6 +421,25 @@ export default function DataroomViewer({
     return effectiveUpdatedAt;
   }, [folders, documents]);
 
+  const cardLayout: DataroomCardLayout = asDataroomCardLayout(
+    (brand as any)?.cardLayout,
+  );
+
+  const viewerHeaderStyle: DataroomViewerHeaderStyle =
+    asDataroomViewerHeaderStyle(
+      (brand as { viewerHeaderStyle?: string }).viewerHeaderStyle,
+    );
+
+  const isModernLayout = viewerHeaderStyle === "SPLIT";
+
+  // Notion preset hides the dataroom navbar entirely (just a cover image +
+  // title). The nav's trailing buttons (CTA, conversations, download) get
+  // hoisted into the body toolbar so they sit on the right of the search.
+  const notionHasBanner =
+    (brand?.banner ?? null) !== "no-banner" && !!brand?.banner;
+  const isNotionLayout =
+    viewerHeaderStyle === "NOTION" && notionHasBanner;
+
   // create a mixedItems array with folders and documents of the current folder and memoize it
   const mixedItems = useMemo(() => {
     // If there's a search query, filter documents by name across all folders
@@ -375,47 +462,56 @@ export default function DataroomViewer({
         .sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
     }
 
-    const mixedItems: FolderOrDocument[] = [
-      ...(folders || [])
-        .filter((folder) => folder.parentId === folderId)
-        .map((folder) => {
-          // Get pre-calculated effective updatedAt
-          const effectiveUpdatedAt =
-            folderEffectiveUpdatedAt.get(folder.id) ||
-            new Date(folder.updatedAt);
+    const folderItems: FolderOrDocument[] = (folders || [])
+      .filter((folder) => folder.parentId === folderId)
+      .map((folder) => {
+        // Get pre-calculated effective updatedAt
+        const effectiveUpdatedAt =
+          folderEffectiveUpdatedAt.get(folder.id) ||
+          new Date(folder.updatedAt);
 
-          // Show the download action when any descendant doc is downloadable
-          // — including the partial case where some are and some aren't, and
-          // the deeply-nested case where the only downloadable doc lives
-          // several levels below this folder.
-          const hasDownloadableDescendant =
-            folderHasDownloadableDescendant.get(folder.id) ?? false;
+        // Show the download action when any descendant doc is downloadable
+        // — including the partial case where some are and some aren't, and
+        // the deeply-nested case where the only downloadable doc lives
+        // several levels below this folder.
+        const hasDownloadableDescendant =
+          folderHasDownloadableDescendant.get(folder.id) ?? false;
 
-          return {
-            ...folder,
-            updatedAt: effectiveUpdatedAt,
-            itemType: "folder",
-            allowDownload: allowDownload && hasDownloadableDescendant,
-          };
-        }),
-      ...(documents || [])
-        .filter((doc) => doc.folderId === folderId)
-        .map((doc) => {
-          const accessControl = accessControlByItemId.get(
-            doc.dataroomDocumentId,
-          );
+        return {
+          ...folder,
+          updatedAt: effectiveUpdatedAt,
+          itemType: "folder",
+          allowDownload: allowDownload && hasDownloadableDescendant,
+        };
+      });
 
-          return {
-            ...doc,
-            itemType: "document",
-            canDownload:
-              (accessControl?.canDownload ?? true) &&
-              doc.versions[0].type !== "notion",
-          };
-        }),
-    ];
+    const documentItems: FolderOrDocument[] = (documents || [])
+      .filter((doc) => doc.folderId === folderId)
+      .map((doc) => {
+        const accessControl = accessControlByItemId.get(
+          doc.dataroomDocumentId,
+        );
 
-    return sortByIndexThenName(mixedItems);
+        return {
+          ...doc,
+          itemType: "document",
+          canDownload:
+            (accessControl?.canDownload ?? true) &&
+            doc.versions[0].type !== "notion",
+        };
+      });
+
+    // Notion design always groups folders above documents in a clean two-row
+    // grid; other layouts keep the legacy interleaved order so admins can mix
+    // folders/docs by orderIndex.
+    if (isNotionLayout) {
+      return [
+        ...sortByIndexThenName(folderItems),
+        ...sortByIndexThenName(documentItems),
+      ];
+    }
+
+    return sortByIndexThenName([...folderItems, ...documentItems]);
   }, [
     folders,
     documents,
@@ -425,7 +521,18 @@ export default function DataroomViewer({
     folderEffectiveUpdatedAt,
     folderHasDownloadableDescendant,
     searchQuery,
+    isNotionLayout,
   ]);
+
+  const compactListShowsActionsColumn = useMemo(() => {
+    if (cardLayout !== "COMPACT" || !allowDownload) return false;
+    return mixedItems.some((item) =>
+      "versions" in item ? item.canDownload : item.allowDownload,
+    );
+  }, [cardLayout, allowDownload, mixedItems]);
+
+  const compactTableShowUpdated =
+    cardLayout === "COMPACT" && (dataroom?.showLastUpdated ?? true);
 
   const filteredPendingUploads = useMemo(
     () =>
@@ -461,7 +568,7 @@ export default function DataroomViewer({
     });
   }, [allUploads, documents, updatePendingUpload]);
 
-  const renderItem = (item: FolderOrDocument) => {
+  const renderItem = (item: FolderOrDocument, editorialIndex = 0) => {
     if ("versions" in item) {
       const isProcessing =
         ["docs", "slides", "pdf"].includes(item.versions[0].type) &&
@@ -478,6 +585,11 @@ export default function DataroomViewer({
           isProcessing={isProcessing}
           dataroomIndexEnabled={dataroomIndexEnabled}
           showLastUpdated={dataroom?.showLastUpdated ?? true}
+          layout={cardLayout}
+          compactShowUpdatedColumn={compactTableShowUpdated}
+          compactShowActionsColumn={compactListShowsActionsColumn}
+          compactShowIndexColumn={cardLayout === "COMPACT"}
+          editorialIndex={editorialIndex}
         />
       );
     }
@@ -494,6 +606,12 @@ export default function DataroomViewer({
         allowDownload={item.allowDownload}
         dataroomIndexEnabled={dataroomIndexEnabled}
         showLastUpdated={dataroom?.showLastUpdated ?? true}
+        layout={cardLayout}
+        hideFolderIcons={hideFolderIconsInMain}
+        compactShowUpdatedColumn={compactTableShowUpdated}
+        compactShowActionsColumn={compactListShowsActionsColumn}
+        compactShowIndexColumn={cardLayout === "COMPACT"}
+        editorialIndex={editorialIndex}
       />
     );
   };
@@ -507,6 +625,36 @@ export default function DataroomViewer({
       ),
     [brand],
   );
+
+  const showFolderTree = (brand as any)?.showFolderTree !== false;
+  const showLeftColumnDesktop = showFolderTree;
+  const showNoBannerTitle = brand?.banner === "no-banner";
+  const hideFolderIconsInMain =
+    (brand as { hideFolderIconsInMain?: boolean }).hideFolderIconsInMain ===
+    true;
+
+  const itemListClassName = cn(
+    "overflow-auto",
+    cardLayout === "GRID"
+      ? "" // GRID uses segmented lists below
+      : cardLayout === "COMPACT"
+        ? ""
+        : "-mx-4 space-y-4 p-4",
+  );
+
+  const folderGridListClassName = cn(
+    "grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4",
+  );
+  const documentGridListClassName = cn(
+    "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5",
+  );
+
+  // Shared className for body-toolbar trigger buttons (Generate Index, Add
+  // Document) so they blend with the dataroom's current surface — light on
+  // white backgrounds, dark on accent-colored backgrounds, etc. Mirrors the
+  // search input's adaptive styling.
+  const viewerThemedTriggerClass =
+    "border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] hover:bg-[var(--viewer-panel-bg-hover)] hover:text-[var(--viewer-text)]";
   const mobileTreeTheme = useMemo(
     () => ({
       ...viewerSurfaceTheme,
@@ -549,11 +697,58 @@ export default function DataroomViewer({
         viewerEmail={viewerEmail}
         conversationsEnabled={viewData.conversationsEnabled}
         isTeamMember={viewData.isTeamMember}
+        topBarBreadcrumb={isModernLayout ? toolbarBreadcrumbEl : undefined}
+        topBarSearch={
+          isModernLayout ? (
+            <SearchBoxPersisted
+              inputClassName="h-9 border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] placeholder:text-[var(--viewer-placeholder)] shadow-sm hover:border-[var(--viewer-control-border-strong)] focus:border-[var(--viewer-control-border-strong)]"
+              leftIconClassName="text-[var(--viewer-control-icon)]"
+              clearIconClassName="text-[var(--viewer-control-icon)] hover:text-[var(--viewer-text)]"
+            />
+          ) : undefined
+        }
+        topBarTrailingActions={
+          isModernLayout ? (
+            <>
+              <IntroductionInfoButton />
+              {enableIndexFile && viewId && viewerId && (
+                <IndexFileDialog
+                  linkId={linkId}
+                  viewId={viewId}
+                  dataroomId={dataroom?.id}
+                  viewerId={viewerId}
+                  viewerEmail={viewerEmail}
+                  triggerClassName={viewerThemedTriggerClass}
+                />
+              )}
+              {viewData?.enableVisitorUpload && viewerId && (
+                <DocumentUploadModal
+                  linkId={linkId}
+                  dataroomId={dataroom?.id}
+                  viewerId={viewerId}
+                  folderId={folderId ?? undefined}
+                  folderName={
+                    folderId
+                      ? folders.find((f) => f.id === folderId)?.name
+                      : undefined
+                  }
+                  allowedFolders={viewData?.uploadFolderAllowList}
+                  triggerClassName={viewerThemedTriggerClass}
+                />
+              )}
+            </>
+          ) : undefined
+        }
+        surfaceBackgroundColor={
+          (brand as any)?.applyAccentColorToDataroomView
+            ? brand?.accentColor ?? null
+            : null
+        }
       />
       <ViewerSurfaceThemeProvider value={viewerSurfaceTheme}>
         <ViewerChatLayout>
           <div
-            className="relative flex flex-1 items-center overflow-hidden bg-white dark:bg-black"
+            className="relative flex flex-1 flex-col bg-white dark:bg-black"
             style={
               viewerSurfaceTheme.palette.backgroundColor
                 ? { backgroundColor: viewerSurfaceTheme.palette.backgroundColor }
@@ -561,7 +756,7 @@ export default function DataroomViewer({
             }
           >
             <div
-              className="relative mx-auto flex h-full w-full items-start justify-center"
+              className="relative mx-auto flex w-full flex-1 flex-col"
               style={
                 {
                   "--viewer-text": viewerSurfaceTheme.palette.textColor,
@@ -584,144 +779,204 @@ export default function DataroomViewer({
                     viewerSurfaceTheme.palette.controlIconColor,
                   "--viewer-placeholder":
                     viewerSurfaceTheme.palette.controlPlaceholderColor,
+                  // Brand accent — opt-in highlights for index prefix, breadcrumb
+                  // leaf, etc. Falls back to brand color, then the surface text
+                  // color so it always reads on the current surface.
+                  "--viewer-accent":
+                    (brand as any)?.accentButtonColor ||
+                    brand?.brandColor ||
+                    viewerSurfaceTheme.palette.textColor,
                 } as React.CSSProperties
               }
             >
-            {/* Tree view */}
+            <div className="flex w-full flex-1 items-start justify-center">
+            {showLeftColumnDesktop && (
             <div
-              className="hidden h-full shrink-0 overflow-y-auto overflow-x-hidden px-3 pb-4 pt-4 md:block md:px-4 md:pt-6 lg:px-6 lg:pt-9 xl:px-8"
+              className="sticky top-0 hidden max-h-screen shrink-0 self-start overflow-y-auto overflow-x-hidden px-3 pb-4 pt-4 md:block md:px-4 md:pt-6 lg:px-6 lg:pt-9 xl:px-8"
               style={{
-                // Fluid sidebar: grows with viewport but clamped to sensible
-                // bounds so the tree fills available space without feeling
-                // cramped on narrow screens or stretched on ultra-wide ones.
                 width: "clamp(260px, 28vw, 440px)",
               }}
             >
-              <ViewFolderTree
-                folders={folders}
-                documents={documents}
-                setFolderId={setFolderId}
-                folderId={folderId}
-                dataroomIndexEnabled={dataroomIndexEnabled}
-              />
+              {showNoBannerTitle ? (
+                <DataroomNoBannerTitle
+                  name={dataroom.name}
+                  lastUpdatedAt={dataroom.lastUpdatedAt}
+                  showLastUpdated={dataroom.showLastUpdated}
+                  className="mb-3"
+                />
+              ) : null}
+              {showFolderTree && (
+                <ViewFolderTree
+                  folders={folders}
+                  documents={documents}
+                  setFolderId={setFolderId}
+                  folderId={folderId}
+                  dataroomIndexEnabled={dataroomIndexEnabled}
+                />
+              )}
             </div>
+            )}
 
-            {/* Detail view */}
-            <ScrollArea
-              showScrollbar
-              className="h-full flex-grow overflow-auto"
-            >
+            {/* Detail view — scrolls with the page, not in its own viewport */}
+            <div className="min-w-0 flex-grow">
               <div
-                className="h-full px-3 pb-4 pt-4 md:px-6 md:pt-6 lg:px-8 lg:pt-9 xl:px-14"
+                className="px-3 pb-4 pt-4 md:px-6 md:pt-6 lg:px-8 lg:pt-9 xl:px-14"
               >
-                <div className="flex items-center gap-x-2">
-                  {/* sidebar for mobile */}
-                  <div className="flex md:hidden">
-                    <Sheet>
-                      <SheetTrigger asChild>
-                        <button className={cn(
-                          "lg:hidden",
-                          "text-[var(--viewer-subtle-text)]",
-                        )}>
-                          <PanelLeftIcon
-                            className="h-5 w-5"
-                            aria-hidden="true"
-                          />
-                        </button>
-                      </SheetTrigger>
-                      <SheetPortal>
-                        <SheetOverlay className="fixed top-[35dvh] z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-                        <SheetPrimitive.Content
-                          className={cn(
-                            "fixed top-[35dvh] z-50 gap-4 bg-background p-6 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
-                            "left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-lg",
-                            "m-0 w-[280px] p-0 sm:w-[300px] lg:hidden",
-                          )}
-                        >
-                          <div className="mt-8 h-full space-y-8 overflow-auto px-2 py-3">
-                            <ViewerSurfaceThemeProvider value={mobileTreeTheme}>
-                              <ViewFolderTree
-                                folders={folders}
-                                documents={documents}
-                                setFolderId={setFolderId}
-                                folderId={folderId}
-                                dataroomIndexEnabled={dataroomIndexEnabled}
-                              />
-                            </ViewerSurfaceThemeProvider>
-                          </div>
-                          <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
-                            <XIcon className="h-4 w-4" />
-                            <span className="sr-only">Close</span>
-                          </SheetPrimitive.Close>
-                        </SheetPrimitive.Content>
-                      </SheetPortal>
-                    </Sheet>
-                  </div>
-
-                  <div className="flex flex-1 items-center justify-between gap-x-2">
-                    <Breadcrumb>
-                      <BreadcrumbList className="text-[var(--viewer-muted-text)]">
-                        <BreadcrumbItem key={"root"}>
-                          <BreadcrumbLink
-                            onClick={() => setFolderId(null)}
-                            className="cursor-pointer text-[var(--viewer-muted-text)] hover:text-[var(--viewer-text)]"
-                          >
-                            Home
-                          </BreadcrumbLink>
-                        </BreadcrumbItem>
-
-                        {breadcrumbFolders.map((folder, index) => (
-                          <React.Fragment key={folder.id}>
-                            <BreadcrumbSeparator
-                              className="text-[var(--viewer-subtle-text)]"
-                            />
-                            <BreadcrumbItem>
-                              <ViewerBreadcrumbItem
-                                folder={folder}
-                                setFolderId={setFolderId}
-                                isLast={index === breadcrumbFolders.length - 1}
-                                dataroomIndexEnabled={dataroomIndexEnabled}
-                              />
-                            </BreadcrumbItem>
-                          </React.Fragment>
-                        ))}
-                      </BreadcrumbList>
-                    </Breadcrumb>
-
+                  {showNoBannerTitle && !showLeftColumnDesktop ? (
+                    <DataroomNoBannerTitle
+                      name={dataroom.name}
+                      lastUpdatedAt={dataroom.lastUpdatedAt}
+                      showLastUpdated={dataroom.showLastUpdated}
+                      className="mb-2 md:mb-3"
+                    />
+                  ) : null}
+                  {/* Modern (SPLIT + LIST) renders its toolbar (breadcrumb,
+                      search, action buttons) inside the nav top-row so the
+                      body skips this section entirely. All other layouts use
+                      the in-body toolbar below. */}
+                  {!isModernLayout ? (
                     <div className="flex items-center gap-x-2">
-                      <IntroductionInfoButton />
-                      <SearchBoxPersisted
-                        inputClassName="h-9 border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] placeholder:text-[var(--viewer-placeholder)] shadow-sm hover:border-[var(--viewer-control-border-strong)] focus:border-[var(--viewer-control-border-strong)]"
-                        leftIconClassName="text-[var(--viewer-control-icon)]"
-                        clearIconClassName="text-[var(--viewer-control-icon)] hover:text-[var(--viewer-text)]"
-                      />
-                      {enableIndexFile && viewId && viewerId && (
-                        <IndexFileDialog
-                          linkId={linkId}
-                          viewId={viewId}
-                          dataroomId={dataroom?.id}
-                          viewerId={viewerId}
-                          viewerEmail={viewerEmail}
-                        />
-                      )}
+                      {/* Mobile folder tree drawer — only when folder navigation is enabled */}
+                      {showFolderTree ? (
+                        <div className="flex md:hidden">
+                          <Sheet>
+                            <SheetTrigger asChild>
+                              <button
+                                className={cn(
+                                  "lg:hidden",
+                                  "text-[var(--viewer-subtle-text)]",
+                                )}
+                              >
+                                <PanelLeftIcon
+                                  className="h-5 w-5"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </SheetTrigger>
+                            <SheetPortal>
+                              <SheetOverlay className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+                              <SheetPrimitive.Content
+                                className={cn(
+                                  "fixed inset-y-0 left-0 z-50 gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
+                                  "border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-lg",
+                                  "m-0 w-[280px] p-0 sm:w-[300px] lg:hidden",
+                                )}
+                              >
+                                <div className="mt-8 h-full space-y-8 overflow-auto px-2 py-3">
+                                  <ViewerSurfaceThemeProvider
+                                    value={mobileTreeTheme}
+                                  >
+                                    {showNoBannerTitle ? (
+                                      <DataroomNoBannerTitle
+                                        name={dataroom.name}
+                                        lastUpdatedAt={dataroom.lastUpdatedAt}
+                                        showLastUpdated={
+                                          dataroom.showLastUpdated
+                                        }
+                                        className="mb-3 px-1"
+                                      />
+                                    ) : null}
+                                    <ViewFolderTree
+                                      folders={folders}
+                                      documents={documents}
+                                      setFolderId={setFolderId}
+                                      folderId={folderId}
+                                      dataroomIndexEnabled={
+                                        dataroomIndexEnabled
+                                      }
+                                    />
+                                  </ViewerSurfaceThemeProvider>
+                                </div>
+                                <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+                                  <XIcon className="h-4 w-4" />
+                                  <span className="sr-only">Close</span>
+                                </SheetPrimitive.Close>
+                              </SheetPrimitive.Content>
+                            </SheetPortal>
+                          </Sheet>
+                        </div>
+                      ) : null}
 
-                      {viewData?.enableVisitorUpload && viewerId && (
-                        <DocumentUploadModal
-                          linkId={linkId}
-                          dataroomId={dataroom?.id}
-                          viewerId={viewerId}
-                          folderId={folderId ?? undefined}
-                          folderName={
-                            folderId
-                              ? folders.find((f) => f.id === folderId)?.name
-                              : undefined
-                          }
-                          allowedFolders={viewData?.uploadFolderAllowList}
-                        />
-                      )}
+                      <div className="flex min-w-0 flex-1 items-center justify-between gap-x-2">
+                        {toolbarBreadcrumbEl}
+
+                        {/* Right cluster: search + buttons. Single inline row on
+                            sm+ (matches the historical layout). On narrow
+                            mobile we allow wrapping so the buttons drop to a
+                            new line instead of overflowing the row — this is
+                            the only mobile concession; sm+ is unchanged. */}
+                        <div className="flex flex-wrap items-center justify-end gap-2 sm:flex-nowrap sm:gap-x-2">
+                          <IntroductionInfoButton />
+                          <SearchBoxPersisted
+                            inputClassName="h-9 border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] placeholder:text-[var(--viewer-placeholder)] shadow-sm hover:border-[var(--viewer-control-border-strong)] focus:border-[var(--viewer-control-border-strong)]"
+                            leftIconClassName="text-[var(--viewer-control-icon)]"
+                            clearIconClassName="text-[var(--viewer-control-icon)] hover:text-[var(--viewer-text)]"
+                          />
+                          {enableIndexFile && viewId && viewerId && (
+                            <IndexFileDialog
+                              linkId={linkId}
+                              viewId={viewId}
+                              dataroomId={dataroom?.id}
+                              viewerId={viewerId}
+                              viewerEmail={viewerEmail}
+                              triggerClassName={viewerThemedTriggerClass}
+                            />
+                          )}
+
+                          {viewData?.enableVisitorUpload && viewerId && (
+                            <DocumentUploadModal
+                              linkId={linkId}
+                              dataroomId={dataroom?.id}
+                              viewerId={viewerId}
+                              folderId={folderId ?? undefined}
+                              folderName={
+                                folderId
+                                  ? folders.find((f) => f.id === folderId)?.name
+                                  : undefined
+                              }
+                              allowedFolders={viewData?.uploadFolderAllowList}
+                              triggerClassName={viewerThemedTriggerClass}
+                            />
+                          )}
+                          {isNotionLayout ? (
+                            <DataroomTrailingActions
+                              variant="onLight"
+                              isTeamMember={viewData?.isTeamMember}
+                              brand={{
+                                ctaLabel: (brand as any)?.ctaLabel ?? null,
+                                ctaUrl: (brand as any)?.ctaUrl ?? null,
+                                brandColor: brand?.brandColor ?? null,
+                                accentButtonColor:
+                                  (brand as any)?.accentButtonColor ?? null,
+                              }}
+                              conversationsEnabled={
+                                viewData?.conversationsEnabled
+                              }
+                              allowDownload={allowDownload}
+                              allowBulkDownload={allowBulkDownload}
+                              viewerEmail={viewerEmail}
+                              onToggleConversations={() =>
+                                window.dispatchEvent(
+                                  new CustomEvent(
+                                    VIEWER_TOGGLE_CONVERSATIONS_EVENT,
+                                  ),
+                                )
+                              }
+                              onOpenDownload={() => {
+                                if (isPreview) return;
+                                if (!allowDownload || !allowBulkDownload)
+                                  return;
+                                if (!viewerEmail) return;
+                                window.dispatchEvent(
+                                  new CustomEvent(VIEWER_OPEN_DOWNLOAD_EVENT),
+                                );
+                              }}
+                            />
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
+                  ) : null}
 
                 {/* Tabs: Documents / My Uploads */}
                 {viewData?.enableVisitorUpload && hasUploads && (
@@ -781,10 +1036,7 @@ export default function DataroomViewer({
 
                 {activeTab === "my-uploads" ? (
                   /* My Uploads tab - show all uploads across all folders */
-                  <ul
-                    role="list"
-                    className="-mx-4 space-y-4 overflow-auto p-4"
-                  >
+                  <ul role="list" className="-mx-4 space-y-4 overflow-auto p-4">
                     {allUploads.length === 0 ? (
                       <li className="py-6 text-center text-[var(--viewer-subtle-text)]">
                         No uploads yet. Upload documents using the &quot;Add
@@ -807,40 +1059,117 @@ export default function DataroomViewer({
                       ))
                     )}
                   </ul>
-                ) : (
-                  /* Documents tab - normal folder view */
-                  <ul
-                    role="list"
-                    className="-mx-4 space-y-4 overflow-auto p-4"
-                  >
+                ) : cardLayout === "GRID" ? (
+                  <div className="-mx-4 space-y-4 overflow-auto p-4">
                     {!searchQuery &&
                       filteredPendingUploads.map((pendingUpload) => (
-                        <li key={pendingUpload.id}>
+                        <div key={pendingUpload.id}>
                           <PendingDocumentCard
                             pendingUpload={pendingUpload}
                             linkId={linkId}
                           />
-                        </li>
+                        </div>
                       ))}
 
                     {mixedItems.length === 0 &&
                     filteredPendingUploads.length === 0 ? (
-                      <li className="py-6 text-center text-[var(--viewer-subtle-text)]">
+                      <div className="py-6 text-center text-[var(--viewer-subtle-text)]">
                         {searchQuery
                           ? "No documents match your search."
                           : "No items available."}
-                      </li>
+                      </div>
                     ) : (
-                      mixedItems.map((item) => (
-                        <li key={item.id}>{renderItem(item)}</li>
+                      segmentMixedItemsForGrid(mixedItems).map((run, runIdx) => (
+                        <ul
+                          key={runIdx}
+                          role="list"
+                          className={
+                            run.kind === "folder"
+                              ? folderGridListClassName
+                              : documentGridListClassName
+                          }
+                        >
+                          {run.items.map((item) => (
+                            <li key={item.id}>{renderItem(item)}</li>
+                          ))}
+                        </ul>
                       ))
                     )}
-                  </ul>
+                  </div>
+                ) : (
+                  /* Documents tab — list / compact layouts */
+                  <div
+                    className={cn(
+                      cardLayout === "COMPACT" &&
+                        "mt-4 border-t border-[var(--viewer-panel-border)]",
+                    )}
+                  >
+                    {cardLayout === "COMPACT" ? (
+                      <CompactDataroomListHeader
+                        showUpdatedColumn={compactTableShowUpdated}
+                        showSettingsColumn={compactListShowsActionsColumn}
+                        showIndexColumn
+                      />
+                    ) : null}
+                    <ul role="list" className={itemListClassName}>
+                      {!searchQuery &&
+                        filteredPendingUploads.map((pendingUpload) => (
+                          <li key={pendingUpload.id}>
+                            <PendingDocumentCard
+                              pendingUpload={pendingUpload}
+                              linkId={linkId}
+                            />
+                          </li>
+                        ))}
+
+                      {mixedItems.length === 0 &&
+                      filteredPendingUploads.length === 0 ? (
+                        <li className="py-6 text-center text-[var(--viewer-subtle-text)]">
+                          {searchQuery
+                            ? "No documents match your search."
+                            : "No items available."}
+                        </li>
+                      ) : (
+                        mixedItems.map((item, idx) => (
+                          <li key={item.id}>{renderItem(item, idx)}</li>
+                        ))
+                      )}
+                    </ul>
+                  </div>
                 )}
+
               </div>
-              <ScrollBar orientation="vertical" />
-              <ScrollBar orientation="horizontal" />
-            </ScrollArea>
+            </div>
+          </div>
+          {showPoweredByBanner ? (
+            <footer className="shrink-0 px-3 md:px-6 lg:px-8 xl:px-14">
+              <div
+                className="border-t py-3"
+                style={{
+                  borderColor:
+                    viewerSurfaceTheme.palette.panelBorderColor,
+                }}
+              >
+                <div className="flex items-center justify-between gap-4 text-xs text-[var(--viewer-subtle-text)]">
+                  <span className="truncate">
+                    &copy; {new Date().getFullYear()}
+                    {dataroom?.name ? ` ${dataroom.name}` : ""}
+                  </span>
+                  <a
+                    href={`https://www.papermark.com?utm_campaign=poweredby&utm_medium=poweredby&utm_source=papermark-${linkId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="whitespace-nowrap transition-colors hover:text-[var(--viewer-text)]"
+                  >
+                    Secured by{" "}
+                    <span className="font-semibold tracking-tight">
+                      Papermark
+                    </span>
+                  </a>
+                </div>
+              </div>
+            </footer>
+          ) : null}
           </div>
           </div>
         </ViewerChatLayout>

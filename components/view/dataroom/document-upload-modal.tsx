@@ -7,6 +7,8 @@ import {
   UploadIcon,
 } from "lucide-react";
 
+import { cn } from "@/lib/utils";
+
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -48,6 +50,7 @@ export function DocumentUploadModal({
   folderId,
   folderName,
   allowedFolders,
+  triggerClassName,
 }: {
   linkId: string;
   dataroomId: string;
@@ -61,6 +64,9 @@ export function DocumentUploadModal({
    * `undefined` means "no restriction".
    */
   allowedFolders?: AllowedFolder[] | null;
+  /** Optional className applied to the trigger button so callers can theme it
+   *  to the surrounding surface (e.g. dark viewer background). */
+  triggerClassName?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
@@ -122,7 +128,10 @@ export function DocumentUploadModal({
         onClick={() => setIsOpen(true)}
         size="sm"
         variant="outline"
-        className="group flex items-center justify-start gap-x-3 px-3 text-left"
+        className={cn(
+          "group flex items-center justify-start gap-x-3 px-3 text-left",
+          triggerClassName,
+        )}
         title="Add Document"
       >
         <PlusIcon className="h-5 w-5 shrink-0" aria-hidden="true" />

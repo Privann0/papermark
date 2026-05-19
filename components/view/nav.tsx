@@ -250,7 +250,7 @@ export default function Nav({
           <div className="absolute inset-y-0 right-0 flex items-center space-x-2 pr-2 sm:static sm:inset-auto sm:ml-6 sm:space-x-4 sm:pr-0">
             {isTeamMember && (
               <TooltipProvider delayDuration={100}>
-                <Tooltip defaultOpen>
+                <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       className="size-8 bg-gray-900 text-white hover:bg-gray-900/80 sm:size-10"
@@ -274,7 +274,7 @@ export default function Nav({
                 onClick={() => setShowConversations(!showConversations)}
                 className="bg-gray-900 text-white hover:bg-gray-900/80"
               >
-                View FAQ
+                View Q&A
               </Button>
             )}
             {/* Annotations toggle button */}

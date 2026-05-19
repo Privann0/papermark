@@ -149,7 +149,7 @@ const SidebarFolders = ({
     <FileTree>
       <SidebarLink
         href={`/datarooms/${dataroomId}/documents`}
-        label={"Dataroom Home"}
+        label={"Home"}
       />
       {nestedFolders.map((folder) => (
         <FolderComponent
@@ -178,8 +178,8 @@ export const SidebarLink = memo(
     return (
       <li
         className={cn(
-          "flex list-none",
-          "rounded-md text-foreground transition-all duration-200 ease-in-out",
+          "flex list-none rounded-md",
+          "text-foreground transition-all duration-200 ease-in-out",
           "hover:bg-gray-100 hover:shadow-sm hover:dark:bg-muted",
           "px-3 py-1.5 leading-6",
           isActive && "bg-gray-100 font-semibold dark:bg-muted",

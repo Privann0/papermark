@@ -4,11 +4,34 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 export default function ViewPage() {
   const router = useRouter();
-  const { brandLogo, brandColor, accentColor } = router.query as {
+  const {
+    brandLogo,
+    brandColor,
+    accentColor,
+    accentButtonColor,
+    ctaLabel,
+    ctaUrl,
+  } = router.query as {
     brandLogo: string;
     brandColor: string;
     accentColor: string;
+    accentButtonColor?: string;
+    ctaLabel?: string;
+    ctaUrl?: string;
   };
+
+  const safeCtaUrl = (() => {
+    if (!ctaUrl) return null;
+    try {
+      const url = new URL(ctaUrl);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+      return url.toString();
+    } catch {
+      return null;
+    }
+  })();
+
+  const showCta = !!ctaLabel && !!safeCtaUrl;
 
   return (
     <div className="bg-gray-950" style={{ backgroundColor: accentColor }}>
@@ -37,6 +60,20 @@ export default function ViewPage() {
               </div>
             </div>
             <div className="absolute inset-y-0 right-0 flex items-center space-x-4 pr-2 sm:static sm:inset-auto sm:ml-6 sm:pr-0">
+              {showCta && (
+                <a
+                  href={safeCtaUrl!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium text-white"
+                  style={{
+                    backgroundColor:
+                      accentButtonColor || brandColor || "#000000",
+                  }}
+                >
+                  {ctaLabel}
+                </a>
+              )}
               <div className="flex h-10 items-center rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white">
                 <span>1</span>
                 <span className="text-gray-400"> / 13</span>

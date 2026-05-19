@@ -101,7 +101,7 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
       };
     }
 
-    const { linkType, link, brand, dataroomIndexEnabled } = result;
+    const { linkType, link, brand, publicMeta } = result;
 
     if (!linkType) {
       return {
@@ -124,12 +124,12 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
             theme: null,
           },
           meta: {
-            enableCustomMetatag: false,
-            metaTitle: null,
-            metaDescription: null,
-            metaImage: null,
+            enableCustomMetatag: publicMeta.enableCustomMetatag,
+            metaTitle: publicMeta.metaTitle,
+            metaDescription: publicMeta.metaDescription,
+            metaImage: publicMeta.metaImage,
             metaUrl: `https://www.papermark.com/view/${linkId}`,
-            metaFavicon: "/favicon.ico",
+            metaFavicon: publicMeta.metaFavicon,
           },
           showPoweredByBanner: false,
           showAccountCreationSlide: false,
@@ -214,11 +214,11 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
             theme,
           },
           meta: {
-            enableCustomMetatag: link.enableCustomMetatag || false,
-            metaTitle: link.metaTitle,
-            metaDescription: link.metaDescription,
-            metaImage: link.metaImage,
-            metaFavicon: link.metaFavicon ?? "/favicon.ico",
+            enableCustomMetatag: publicMeta.enableCustomMetatag,
+            metaTitle: publicMeta.metaTitle,
+            metaDescription: publicMeta.metaDescription,
+            metaImage: publicMeta.metaImage,
+            metaFavicon: publicMeta.metaFavicon,
             metaUrl: `https://www.papermark.com/view/${linkId}`,
           },
           showPoweredByBanner: link.showBanner || teamPlan === "free",
@@ -268,8 +268,9 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
 
       const { teamId } = link.dataroom;
 
-      // `dataroomIndexEnabled` is resolved server-side by `fetchLinkDataById`.
       const featureFlags = await getFeatureFlags({ teamId });
+      const dataroomIndexEnabled =
+        result.dataroomIndexEnabledForViewer ?? false;
       const annotationsEnabled = featureFlags.annotations;
       const textSelectionEnabled = featureFlags.textSelection;
 
@@ -299,11 +300,11 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
             brand,
           },
           meta: {
-            enableCustomMetatag: link.enableCustomMetatag || false,
-            metaTitle: link.metaTitle,
-            metaDescription: link.metaDescription,
-            metaImage: link.metaImage,
-            metaFavicon: link.metaFavicon ?? "/favicon.ico",
+            enableCustomMetatag: publicMeta.enableCustomMetatag,
+            metaTitle: publicMeta.metaTitle,
+            metaDescription: publicMeta.metaDescription,
+            metaImage: publicMeta.metaImage,
+            metaFavicon: publicMeta.metaFavicon,
             metaUrl: `https://www.papermark.com/view/${linkId}`,
           },
           showPoweredByBanner: false,

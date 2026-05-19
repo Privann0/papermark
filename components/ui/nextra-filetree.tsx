@@ -71,7 +71,7 @@ function Tree({
         className={cn("nextra-filetree !mt-0 w-full select-none text-sm")}
         style={style}
       >
-        <div className="block space-y-1 rounded-lg">{children}</div>
+        <div className="block space-y-1">{children}</div>
       </div>
     </prefersLightTextCtx.Provider>
   );
@@ -140,8 +140,8 @@ const Folder = memo<FolderProps>(
         <div
           title={name}
           className={cn(
-            "flex w-full min-w-0 cursor-pointer items-center",
-            "rounded-md duration-100",
+            "flex w-full min-w-0 cursor-pointer items-center rounded-md",
+            "duration-100",
             prefersLightText
               ? "text-[var(--viewer-text)] hover:bg-[var(--viewer-control-bg)]"
               : "text-foreground hover:bg-gray-100 hover:dark:bg-muted",
@@ -157,7 +157,7 @@ const Folder = memo<FolderProps>(
         >
           <Ident />
           <div
-            className="-m-1 -ml-2 flex h-full shrink-0 items-center justify-center rounded p-2"
+            className="-m-1 -ml-2 flex h-full shrink-0 items-center justify-center p-2"
             onClick={handleChevronClick}
           >
             <ChevronRightIcon
@@ -199,8 +199,8 @@ const File = memo<FileProps>(({ label, name, active, onToggle }) => {
   return (
     <li
       className={cn(
-        "flex min-w-0 list-none",
-        "rounded-md duration-100",
+        "flex min-w-0 list-none rounded-md",
+        "duration-100",
         prefersLightText
           ? "text-[var(--viewer-muted-text)] hover:bg-[var(--viewer-control-bg)]"
           : "text-foreground hover:bg-gray-100 hover:dark:bg-muted",

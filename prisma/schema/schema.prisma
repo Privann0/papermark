@@ -81,11 +81,28 @@ model Brand {
   logo                           String? // This should be a reference to where the file is stored (S3, Google Cloud Storage, etc.)
   banner                         String? // Banner image for dataroom view (fallback)
   brandColor                     String? // This should be a reference to the brand color
-  accentColor                    String? // This should be a reference to the accent color
+  accentColor                    String? // This should be a reference to the accent color (front-page background)
+  accentButtonColor              String? // Color used for CTA buttons (separate from brand/background)
   applyAccentColorToDataroomView Boolean @default(false) // Global default for whether accentColor applies to dataroom list/tree viewer background
   welcomeMessage                 String? // This should be a reference to the welcome message
-  teamId                         String  @unique
-  team                           Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  ctaLabel                       String? // Default CTA button label (inherited by datarooms unless overridden)
+  ctaUrl                         String? // Default CTA button URL (inherited by datarooms unless overridden)
+
+  cardLayout            String  @default("LIST")
+  showFolderTree        Boolean @default(true)
+  viewerLayoutPreset    String  @default("STANDARD")
+  viewerHeaderStyle     String  @default("DEFAULT")
+  hideFolderIconsInMain Boolean @default(false)
+
+  // Default Open Graph / social preview for shared links (per-link settings override)
+  customLinkPreviewEnabled Boolean @default(false)
+  linkPreviewTitle         String?
+  linkPreviewDescription   String?
+  linkPreviewImage         String?
+  linkPreviewFavicon       String?
+
+  teamId String @unique
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -42,10 +42,12 @@ model Dataroom {
   // when new documents/folders are added to this dataroom.
   defaultPermissionStrategy DefaultPermissionStrategy @default(INHERIT_FROM_PARENT)
 
-  // Default strategy applied to viewer groups (group file permissions) when
-  // new documents/folders are added. Kept separate from
-  // `defaultPermissionStrategy` so admins can have, for example, links default
-  // to inheriting permissions while groups default to hidden.
+  // Seeds the "Show Secured by Papermark" toggle on new links. Pre-existing
+  // datarooms were backfilled to false; new datarooms default to true.
+  defaultShowBanner Boolean @default(true)
+
+  // Default permission strategy for viewer groups. Kept separate from
+  // defaultPermissionStrategy so links and groups can have different defaults.
   defaultGroupPermissionStrategy DefaultPermissionStrategy @default(INHERIT_FROM_PARENT)
 
   // bulk download setting
@@ -125,15 +127,32 @@ model DataroomFolder {
 }
 
 model DataroomBrand {
-  id                             String   @id @default(cuid())
+  id                             String  @id @default(cuid())
   logo                           String? // This should be a reference to where the file is stored (S3, Google Cloud Storage, etc.)
   banner                         String? // This should be a reference to where the file is stored (S3, Google Cloud Storage, etc.)
   brandColor                     String? // This should be a reference to the brand color
-  accentColor                    String? // This should be a reference to the accent color
-  applyAccentColorToDataroomView Boolean  @default(false) // When true, apply accentColor to dataroom list/tree viewer background
+  accentColor                    String? // This should be a reference to the accent color (front-page background)
+  accentButtonColor              String? // Color used for CTA buttons; falls back to global Brand.accentButtonColor
+  applyAccentColorToDataroomView Boolean @default(false) // When true, apply accentColor to dataroom list/tree viewer background
   welcomeMessage                 String? // This should be a reference to the welcome message
-  dataroomId                     String   @unique
-  dataroom                       Dataroom @relation(fields: [dataroomId], references: [id], onDelete: Cascade)
+
+  cardLayout            String  @default("LIST")
+  showFolderTree        Boolean @default(true) // hide folder nav tree when false
+  viewerLayoutPreset    String  @default("STANDARD")
+  viewerHeaderStyle     String  @default("DEFAULT")
+  hideFolderIconsInMain Boolean @default(false)
+  ctaLabel              String?
+  ctaUrl                String?
+
+  // Open Graph / social preview for this dataroom's links (overrides team brand when enabled)
+  customLinkPreviewEnabled Boolean @default(false)
+  linkPreviewTitle         String?
+  linkPreviewDescription   String?
+  linkPreviewImage         String?
+  linkPreviewFavicon       String?
+
+  dataroomId String   @unique
+  dataroom   Dataroom @relation(fields: [dataroomId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

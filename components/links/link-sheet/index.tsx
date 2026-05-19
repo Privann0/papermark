@@ -88,7 +88,7 @@ export const DEFAULT_LINK_PROPS = (
   questionType: null,
   enableAgreement: false,
   agreementId: null,
-  showBanner: linkType === LinkType.DOCUMENT_LINK ? showBanner : false,
+  showBanner: showBanner,
   enableWatermark: false,
   watermarkConfig: null,
   audienceType: groupId ? LinkAudienceType.GROUP : LinkAudienceType.GENERAL,

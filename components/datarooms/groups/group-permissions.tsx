@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 import {
   HIERARCHICAL_DISPLAY_STYLE,
   getHierarchicalDisplayName,
-  useDataroomIndexEnabled,
+  useDataroomIndexDisplayEnabled,
 } from "@/lib/utils/hierarchical-display";
 
 import CloudDownloadOff from "@/components/shared/icons/cloud-download-off";
@@ -60,7 +60,7 @@ import {
 } from "@/components/ui/tooltip";
 
 const PermissionItemName = ({ item }: { item: FileOrFolder }) => {
-  const isDataroomIndexEnabled = useDataroomIndexEnabled();
+  const isDataroomIndexEnabled = useDataroomIndexDisplayEnabled();
 
   const displayName = getHierarchicalDisplayName(
     item.name,
@@ -308,7 +308,7 @@ const buildTree = (
 const buildTreeWithRoot = (
   items: any[],
   permissions: ViewerGroupAccessControls[],
-  dataroomName: string = "Dataroom Home",
+  dataroomName: string = "Home",
 ): FileOrFolder[] => {
   // Get all items (folders and root documents)
   const allItems = buildTree(items, permissions, null);
@@ -576,7 +576,7 @@ export default function ExpandableTable({
   // never wipes out unsaved work in this view.
   useEffect(() => {
     if (folders && !loading && !hasPendingChanges) {
-      const treeData = buildTreeWithRoot(folders, permissions, "Dataroom Home");
+      const treeData = buildTreeWithRoot(folders, permissions, "Home");
       setData(treeData);
     }
   }, [folders, loading, permissions, hasPendingChanges]);
@@ -584,7 +584,7 @@ export default function ExpandableTable({
   const handleDiscardChanges = useCallback(() => {
     if (!folders) return;
     setPendingChanges({});
-    setData(buildTreeWithRoot(folders, permissions, "Dataroom Home"));
+    setData(buildTreeWithRoot(folders, permissions, "Home"));
   }, [folders, permissions]);
 
   const handleSaveChanges = useCallback(async () => {

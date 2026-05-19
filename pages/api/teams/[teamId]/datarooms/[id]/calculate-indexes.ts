@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { getServerSession } from "next-auth/next";
 
+import { teamPlanIsDataroomPlusTier } from "@/lib/billing/team-plan-custom-messaging";
 import { getFeatureFlags } from "@/lib/featureFlags";
 import prisma from "@/lib/prisma";
 import { CustomUser } from "@/lib/types";
@@ -70,13 +71,9 @@ export default async function handler(
 
     // Check if user has access: feature flag enabled OR datarooms-plus plan
     const featureFlags = await getFeatureFlags({ teamId });
-    const hasDataroomsPlusPlan =
-      dataroom.team.plan === "datarooms-plus" ||
-      dataroom.team.plan === "datarooms-plus+old" ||
-      dataroom.team.plan === "datarooms-premium" ||
-      dataroom.team.plan === "datarooms-premium+old" ||
-      dataroom.team.plan === "datarooms-unlimited" ||
-      dataroom.team.plan === "datarooms-unlimited+old";
+    const hasDataroomsPlusPlan = teamPlanIsDataroomPlusTier(
+      dataroom.team.plan,
+    );
 
     if (!featureFlags.dataroomIndex && !hasDataroomsPlusPlan) {
       return res.status(403).json({

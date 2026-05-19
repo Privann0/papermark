@@ -309,7 +309,7 @@ export default function DataroomView({
           dataroomId={viewData.enableVisitorUpload ? dataroom?.id : undefined}
         >
         <div
-          className="min-h-screen bg-white"
+          className="flex min-h-screen flex-col bg-white"
           style={{ backgroundColor: dataroomViewBackgroundColor ?? undefined }}
         >
           <DataroomViewer
@@ -327,6 +327,7 @@ export default function DataroomView({
             viewData={viewData}
             isEmbedded={isEmbedded}
             dataroomIndexEnabled={dataroomIndexEnabled}
+            showPoweredByBanner={link.showBanner ?? false}
             viewerEmail={
               viewData.viewerEmail ??
               data.email ??

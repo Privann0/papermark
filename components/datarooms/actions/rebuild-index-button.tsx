@@ -21,8 +21,9 @@ import {
 import { ResponsiveButton } from "@/components/ui/responsive-button";
 
 interface RebuildIndexButtonProps {
-  teamId: string;
-  dataroomId: string;
+  /** Team id from context; may be undefined briefly while layout loads. */
+  teamId?: string;
+  dataroomId?: string;
   disabled?: boolean;
 }
 
@@ -57,6 +58,11 @@ export default function RebuildIndexButton({
       return;
     }
 
+    if (!teamId || !dataroomId) {
+      toast.error("Missing team or data room. Refresh the page and try again.");
+      return;
+    }
+
     try {
       setIsLoading(true);
 
@@ -71,8 +77,15 @@ export default function RebuildIndexButton({
       );
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Failed to rebuild indexes");
+        const raw = await response.text();
+        let message = "Failed to rebuild indexes";
+        try {
+          const parsed = JSON.parse(raw) as { message?: string };
+          if (typeof parsed.message === "string") message = parsed.message;
+        } catch {
+          if (raw) message = raw;
+        }
+        throw new Error(message);
       }
 
       const result = await response.json();
@@ -103,7 +116,7 @@ export default function RebuildIndexButton({
           text="Rebuild Index"
           variant="outline"
           size="sm"
-          disabled={disabled}
+          disabled={disabled || !teamId || !dataroomId}
         />
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">

@@ -11,6 +11,9 @@ import {
 
 import { getFeatureFlags } from "@/lib/featureFlags";
 import prisma from "@/lib/prisma";
+import { resolveDataroomIndexEnabledForViewer } from "@/lib/featureFlags/dataroom-index-viewer";
+import { resolvePublicLinkMeta } from "@/ee/features/branding/lib/resolve-public-link-meta";
+import type { ResolvedPublicLinkMeta } from "@/ee/features/branding/lib/resolve-public-link-meta";
 import { sortItemsByIndexAndName } from "@/lib/utils/sort-items-by-index-name";
 
 // ============================================================================
@@ -25,6 +28,8 @@ type LinkFetchStatus =
   | "free"
   | "frozen";
 
+export type { ResolvedPublicLinkMeta };
+
 export type LinkFetchResult =
   | {
       status: "ok";
@@ -32,7 +37,9 @@ export type LinkFetchResult =
       link: any;
       brand: Partial<Brand> | Partial<DataroomBrand> | null;
       linkId?: string;
-      dataroomIndexEnabled?: boolean;
+      publicMeta: ResolvedPublicLinkMeta;
+      /** Server-only resolved flag for dataroom visitor views (not serialized onto link). */
+      dataroomIndexEnabledForViewer?: boolean;
     }
   | {
       status: Exclude<LinkFetchStatus, "ok">;
@@ -309,8 +316,16 @@ export async function fetchDataroomLinkData({
       banner: true,
       brandColor: true,
       accentColor: true,
+      accentButtonColor: true,
       applyAccentColorToDataroomView: true,
       welcomeMessage: true,
+      cardLayout: true,
+      showFolderTree: true,
+      viewerLayoutPreset: true,
+      viewerHeaderStyle: true,
+      hideFolderIconsInMain: true,
+      ctaLabel: true,
+      ctaUrl: true,
     },
   });
 
@@ -321,8 +336,16 @@ export async function fetchDataroomLinkData({
       banner: true,
       brandColor: true,
       accentColor: true,
+      accentButtonColor: true,
       applyAccentColorToDataroomView: true,
       welcomeMessage: true,
+      ctaLabel: true,
+      ctaUrl: true,
+      cardLayout: true,
+      showFolderTree: true,
+      viewerLayoutPreset: true,
+      viewerHeaderStyle: true,
+      hideFolderIconsInMain: true,
     },
   });
 
@@ -331,11 +354,35 @@ export async function fetchDataroomLinkData({
     banner: dataroomBrand?.banner || teamBrand?.banner || null,
     brandColor: dataroomBrand?.brandColor || teamBrand?.brandColor,
     accentColor: dataroomBrand?.accentColor || teamBrand?.accentColor,
+    accentButtonColor:
+      dataroomBrand?.accentButtonColor || teamBrand?.accentButtonColor || null,
     applyAccentColorToDataroomView:
       dataroomBrand?.applyAccentColorToDataroomView ??
       teamBrand?.applyAccentColorToDataroomView ??
       false,
     welcomeMessage: dataroomBrand?.welcomeMessage || teamBrand?.welcomeMessage,
+    // Layout fields cascade: dataroom override → team default → enum default.
+    // Per-dataroom rows always win once present (matches accentColor pattern).
+    cardLayout:
+      dataroomBrand?.cardLayout ?? (teamBrand as any)?.cardLayout ?? "LIST",
+    showFolderTree:
+      dataroomBrand?.showFolderTree ??
+      (teamBrand as any)?.showFolderTree ??
+      true,
+    viewerLayoutPreset:
+      dataroomBrand?.viewerLayoutPreset ??
+      (teamBrand as any)?.viewerLayoutPreset ??
+      "STANDARD",
+    viewerHeaderStyle:
+      dataroomBrand?.viewerHeaderStyle ??
+      (teamBrand as any)?.viewerHeaderStyle ??
+      "DEFAULT",
+    hideFolderIconsInMain:
+      dataroomBrand?.hideFolderIconsInMain ??
+      (teamBrand as any)?.hideFolderIconsInMain ??
+      false,
+    ctaLabel: dataroomBrand?.ctaLabel ?? teamBrand?.ctaLabel ?? null,
+    ctaUrl: dataroomBrand?.ctaUrl ?? teamBrand?.ctaUrl ?? null,
   };
 
   // Extract access controls from either ViewerGroup or PermissionGroup
@@ -468,8 +515,16 @@ export async function fetchDataroomDocumentLinkData({
       banner: true,
       brandColor: true,
       accentColor: true,
+      accentButtonColor: true,
       applyAccentColorToDataroomView: true,
       welcomeMessage: true,
+      cardLayout: true,
+      showFolderTree: true,
+      viewerLayoutPreset: true,
+      viewerHeaderStyle: true,
+      hideFolderIconsInMain: true,
+      ctaLabel: true,
+      ctaUrl: true,
     },
   });
 
@@ -480,8 +535,16 @@ export async function fetchDataroomDocumentLinkData({
       banner: true,
       brandColor: true,
       accentColor: true,
+      accentButtonColor: true,
       applyAccentColorToDataroomView: true,
       welcomeMessage: true,
+      ctaLabel: true,
+      ctaUrl: true,
+      cardLayout: true,
+      showFolderTree: true,
+      viewerLayoutPreset: true,
+      viewerHeaderStyle: true,
+      hideFolderIconsInMain: true,
     },
   });
 
@@ -490,11 +553,33 @@ export async function fetchDataroomDocumentLinkData({
     banner: dataroomBrand?.banner || teamBrand?.banner || null,
     brandColor: dataroomBrand?.brandColor || teamBrand?.brandColor,
     accentColor: dataroomBrand?.accentColor || teamBrand?.accentColor,
+    accentButtonColor:
+      dataroomBrand?.accentButtonColor || teamBrand?.accentButtonColor || null,
     applyAccentColorToDataroomView:
       dataroomBrand?.applyAccentColorToDataroomView ??
       teamBrand?.applyAccentColorToDataroomView ??
       false,
     welcomeMessage: dataroomBrand?.welcomeMessage || teamBrand?.welcomeMessage,
+    cardLayout:
+      dataroomBrand?.cardLayout ?? (teamBrand as any)?.cardLayout ?? "LIST",
+    showFolderTree:
+      dataroomBrand?.showFolderTree ??
+      (teamBrand as any)?.showFolderTree ??
+      true,
+    viewerLayoutPreset:
+      dataroomBrand?.viewerLayoutPreset ??
+      (teamBrand as any)?.viewerLayoutPreset ??
+      "STANDARD",
+    viewerHeaderStyle:
+      dataroomBrand?.viewerHeaderStyle ??
+      (teamBrand as any)?.viewerHeaderStyle ??
+      "DEFAULT",
+    hideFolderIconsInMain:
+      dataroomBrand?.hideFolderIconsInMain ??
+      (teamBrand as any)?.hideFolderIconsInMain ??
+      false,
+    ctaLabel: dataroomBrand?.ctaLabel ?? teamBrand?.ctaLabel ?? null,
+    ctaUrl: dataroomBrand?.ctaUrl ?? teamBrand?.ctaUrl ?? null,
   };
 
   return { linkData, brand };
@@ -613,6 +698,13 @@ async function processLinkData(
       brand: serializedBrand,
       linkId: link.id,
       link: serializedLink,
+      publicMeta: {
+        enableCustomMetatag: false,
+        metaTitle: null,
+        metaDescription: null,
+        metaImage: null,
+        metaFavicon: "/favicon.ico",
+      },
     };
   }
 
@@ -748,33 +840,92 @@ async function processLinkData(
     dataroomDocument: linkData?.dataroom?.documents?.[0] || undefined,
   };
 
+  let publicMeta: ResolvedPublicLinkMeta = {
+    enableCustomMetatag: false,
+    metaTitle: null,
+    metaDescription: null,
+    metaImage: null,
+    metaFavicon: "/favicon.ico",
+  };
+
+  if (
+    link.teamId &&
+    (linkType === "DOCUMENT_LINK" || linkType === "DATAROOM_LINK")
+  ) {
+    const [teamBrandLp, dataroomBrandLp] = await Promise.all([
+      prisma.brand.findFirst({
+        where: { teamId: link.teamId },
+        select: {
+          customLinkPreviewEnabled: true,
+          linkPreviewTitle: true,
+          linkPreviewDescription: true,
+          linkPreviewImage: true,
+          linkPreviewFavicon: true,
+        },
+      }),
+      linkType === "DATAROOM_LINK" && link.dataroomId
+        ? prisma.dataroomBrand.findFirst({
+            where: { dataroomId: link.dataroomId },
+            select: {
+              customLinkPreviewEnabled: true,
+              linkPreviewTitle: true,
+              linkPreviewDescription: true,
+              linkPreviewImage: true,
+              linkPreviewFavicon: true,
+            },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    let defaultTitle = "Shared link | Powered by Papermark";
+    if (linkType === "DOCUMENT_LINK" && linkData?.document?.name) {
+      defaultTitle = `${linkData.document.name} | Powered by Papermark`;
+    } else if (linkType === "DATAROOM_LINK") {
+      const docName =
+        linkData?.dataroom?.documents?.[0]?.document?.name ?? null;
+      if (docName) {
+        defaultTitle = `${docName} | Powered by Papermark`;
+      } else if (linkData?.dataroom?.name) {
+        defaultTitle = `${linkData.dataroom.name} | Powered by Papermark`;
+      }
+    }
+
+    publicMeta = resolvePublicLinkMeta({
+      link: {
+        enableCustomMetatag: !!link.enableCustomMetatag,
+        metaTitle: link.metaTitle,
+        metaDescription: link.metaDescription,
+        metaImage: link.metaImage,
+        metaFavicon: link.metaFavicon,
+      },
+      teamBrand: teamBrandLp,
+      dataroomBrand: dataroomBrandLp,
+      defaultTitle,
+    });
+  }
+
+  let dataroomIndexEnabledForViewer: boolean | undefined;
+  if (linkType === "DATAROOM_LINK" && link.teamId) {
+    dataroomIndexEnabledForViewer =
+      await resolveDataroomIndexEnabledForViewer({
+        teamId: link.teamId,
+        teamPlan,
+      });
+  }
+
   // Serialize to convert Date objects to strings (required for Next.js getStaticProps)
   const serializedLink = JSON.parse(JSON.stringify(returnLink));
   const serializedBrand = brand ? JSON.parse(JSON.stringify(brand)) : null;
-
-  // Mirrors the rebuild gate in `calculate-indexes.ts`. Computed here
-  // because `link.team` is stripped from the payload below.
-  let dataroomIndexEnabled: boolean | undefined;
-  if (linkType === "DATAROOM_LINK" && link.teamId) {
-    const hasDataroomsPlusPlan =
-      teamPlan === "datarooms-plus" ||
-      teamPlan === "datarooms-plus+old" ||
-      teamPlan === "datarooms-premium" ||
-      teamPlan === "datarooms-unlimited";
-    if (hasDataroomsPlusPlan) {
-      dataroomIndexEnabled = true;
-    } else {
-      const featureFlags = await getFeatureFlags({ teamId: link.teamId });
-      dataroomIndexEnabled = featureFlags.dataroomIndex;
-    }
-  }
 
   return {
     status: "ok",
     linkType,
     link: serializedLink,
     brand: serializedBrand,
-    dataroomIndexEnabled,
+    publicMeta: JSON.parse(JSON.stringify(publicMeta)),
+    ...(dataroomIndexEnabledForViewer !== undefined && {
+      dataroomIndexEnabledForViewer,
+    }),
   };
 }
 

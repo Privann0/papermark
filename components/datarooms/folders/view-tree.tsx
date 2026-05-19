@@ -199,8 +199,8 @@ const HomeLink = memo(
     return (
       <li
         className={cn(
-          "flex list-none",
-          "rounded-md transition-all duration-200 ease-in-out",
+          "flex list-none rounded-md",
+          "transition-all duration-200 ease-in-out",
           usesLightText
             ? "text-[var(--viewer-text)] hover:bg-[var(--viewer-control-bg)]"
             : "text-foreground hover:bg-gray-100 hover:shadow-sm hover:dark:bg-muted",
@@ -228,8 +228,8 @@ const HomeLink = memo(
           }}
         >
           <HomeIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
-          <span className="ml-2 min-w-0 flex-1 truncate" title="Dataroom Home">
-            Dataroom Home
+          <span className="ml-2 min-w-0 flex-1 truncate" title="Home">
+            Home
           </span>
         </span>
       </li>

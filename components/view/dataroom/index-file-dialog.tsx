@@ -29,6 +29,9 @@ interface IndexFileDialogProps {
   dataroomId: string;
   viewerEmail?: string;
   viewerId?: string;
+  /** Optional className applied to the trigger button so callers can override
+   *  the default outline styling (e.g. theme it to a viewer surface color). */
+  triggerClassName?: string;
 }
 
 export default function IndexFileDialog({
@@ -38,6 +41,7 @@ export default function IndexFileDialog({
   dataroomId,
   viewerEmail,
   viewerId,
+  triggerClassName,
 }: IndexFileDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [selectedFormat, setSelectedFormat] =
@@ -119,7 +123,12 @@ export default function IndexFileDialog({
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" disabled={disabled}>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          className={triggerClassName}
+        >
           <FileSlidersIcon />
           Generate Index File
         </Button>

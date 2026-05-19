@@ -2,13 +2,99 @@ import { NextApiRequest, NextApiResponse } from "next";
 
 import { del } from "@vercel/blob";
 import { getServerSession } from "next-auth";
+import { z } from "zod";
 
+import {
+  DataroomCardLayoutSchema,
+  DataroomViewerHeaderStyleSchema,
+  DataroomViewerLayoutPresetSchema,
+  type DataroomCardLayout,
+  type DataroomViewerHeaderStyle,
+  type DataroomViewerLayoutPreset,
+} from "@/ee/features/branding/lib/dataroom-viewer-layout";
+import {
+  teamPlanAllowsCustomWelcomeAndCta,
+  teamPlanAllowsLayoutCustomization,
+} from "@/lib/billing/team-plan-custom-messaging";
+import { validateRedirectUrl } from "@/lib/api/domains/validate-redirect-url";
 import { errorhandler } from "@/lib/errorHandler";
 import prisma from "@/lib/prisma";
 import { redis } from "@/lib/redis";
 import { CustomUser } from "@/lib/types";
 
 import { authOptions } from "../../auth/[...nextauth]";
+
+const updateBrandingSchema = z.object({
+  logo: z.string().nullable().optional(),
+  banner: z.string().nullable().optional(),
+  brandColor: z.string().nullable().optional(),
+  accentColor: z.string().nullable().optional(),
+  accentButtonColor: z.string().nullable().optional(),
+  applyAccentColorToDataroomView: z.boolean().optional(),
+  welcomeMessage: z.string().nullable().optional(),
+  customLinkPreviewEnabled: z.boolean().optional(),
+  linkPreviewTitle: z.string().nullable().optional(),
+  linkPreviewDescription: z.string().nullable().optional(),
+  linkPreviewImage: z.string().nullable().optional(),
+  linkPreviewFavicon: z.string().nullable().optional(),
+  ctaLabel: z.string().nullable().optional(),
+  ctaUrl: z.string().nullable().optional(),
+  cardLayout: DataroomCardLayoutSchema.optional(),
+  showFolderTree: z.boolean().optional(),
+  viewerLayoutPreset: DataroomViewerLayoutPresetSchema.optional(),
+  viewerHeaderStyle: DataroomViewerHeaderStyleSchema.optional(),
+  hideFolderIconsInMain: z.boolean().optional(),
+});
+
+type LayoutPayload = {
+  cardLayout?: DataroomCardLayout;
+  showFolderTree?: boolean;
+  viewerLayoutPreset?: DataroomViewerLayoutPreset;
+  viewerHeaderStyle?: DataroomViewerHeaderStyle;
+  hideFolderIconsInMain?: boolean;
+};
+
+/**
+ * Re-validate the layout payload at the persistence boundary. The route-level
+ * Zod parse already rejects unknown values, but we re-narrow here because
+ * `sanitizeLayoutPayload` is the single sink that writes layout fields and we
+ * want a defense-in-depth guard against future callers that bypass the
+ * top-level schema.
+ */
+function sanitizeLayoutPayload(input: LayoutPayload): LayoutPayload {
+  const out: LayoutPayload = {};
+  if (
+    input.cardLayout &&
+    DataroomCardLayoutSchema.safeParse(input.cardLayout).success
+  ) {
+    out.cardLayout = input.cardLayout;
+  }
+  if (typeof input.showFolderTree === "boolean") {
+    out.showFolderTree = input.showFolderTree;
+  }
+  if (
+    input.viewerLayoutPreset &&
+    DataroomViewerLayoutPresetSchema.safeParse(input.viewerLayoutPreset).success
+  ) {
+    out.viewerLayoutPreset = input.viewerLayoutPreset;
+  }
+  if (
+    input.viewerHeaderStyle &&
+    DataroomViewerHeaderStyleSchema.safeParse(input.viewerHeaderStyle).success
+  ) {
+    out.viewerHeaderStyle = input.viewerHeaderStyle;
+  }
+  if (typeof input.hideFolderIconsInMain === "boolean") {
+    out.hideFolderIconsInMain = input.hideFolderIconsInMain;
+  }
+  return out;
+}
+
+function maybeDeleteBlobAsset(url: string | null | undefined): Promise<void> {
+  if (!url || url === "no-banner") return Promise.resolve();
+  if (url.startsWith("/") || url.startsWith("data:")) return Promise.resolve();
+  return del(url).catch(() => {});
+}
 
 export default async function handle(
   req: NextApiRequest,
@@ -59,86 +145,244 @@ export default async function handle(
     return res.status(200).json(brand);
   } else if (req.method === "POST") {
     // POST /api/teams/:teamId/branding
-    const {
-      logo,
-      banner,
-      brandColor,
-      accentColor,
-      applyAccentColorToDataroomView,
-      welcomeMessage,
-    } = req.body as {
-      logo?: string;
-      banner?: string;
-      brandColor?: string;
-      accentColor?: string;
-      applyAccentColorToDataroomView?: boolean;
-      welcomeMessage?: string;
-    };
+    const teamAuth = await prisma.team.findFirst({
+      where: {
+        id: teamId,
+        users: {
+          some: { userId: (session.user as CustomUser).id },
+        },
+      },
+      select: { plan: true },
+    });
+    if (!teamAuth) {
+      return res.status(403).end("Unauthorized to access this team");
+    }
+    const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(teamAuth.plan);
+    const layoutAllowed = teamPlanAllowsLayoutCustomization(teamAuth.plan);
 
-    // update team with new branding
-    const brand = await prisma.brand.create({
-      data: {
-        logo: logo,
-        banner,
-        brandColor,
-        accentColor,
-        applyAccentColorToDataroomView: !!applyAccentColorToDataroomView,
-        welcomeMessage,
+    const parsed = updateBrandingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid request body",
+        errors: parsed.error.flatten().fieldErrors,
+      });
+    }
+    const body = parsed.data;
+
+    const layoutData = layoutAllowed
+      ? sanitizeLayoutPayload({
+          cardLayout: body.cardLayout,
+          showFolderTree: body.showFolderTree,
+          viewerLayoutPreset: body.viewerLayoutPreset,
+          viewerHeaderStyle: body.viewerHeaderStyle,
+          hideFolderIconsInMain: body.hideFolderIconsInMain,
+        })
+      : {};
+
+    // Run the CTA URL through the shared validator (HTTPS, SSRF guard,
+    // Edge Config keyword blocklist with trusted-team bypass). Only run
+    // when the plan permits messaging, since otherwise the value is
+    // ignored at the persistence step anyway.
+    let validatedCtaUrl: string | null | undefined = body.ctaUrl;
+    if (messagingAllowed && typeof body.ctaUrl === "string") {
+      const ctaValidation = await validateRedirectUrl(body.ctaUrl, teamId);
+      if (!ctaValidation.valid) {
+        return res.status(400).json({ message: ctaValidation.message });
+      }
+      validatedCtaUrl = ctaValidation.url;
+    }
+
+    // Use upsert so POST is idempotent: clients can hit POST even when a
+    // Brand row already exists (e.g. SWR cache is stale and `brand` is
+    // falsy on the client) without tripping the unique-teamId constraint.
+    const brand = await prisma.brand.upsert({
+      where: { teamId },
+      create: {
+        logo: body.logo,
+        banner: body.banner,
+        brandColor: body.brandColor,
+        accentColor: body.accentColor,
+        accentButtonColor: body.accentButtonColor ?? undefined,
+        applyAccentColorToDataroomView:
+          body.applyAccentColorToDataroomView ?? false,
+        welcomeMessage: messagingAllowed ? body.welcomeMessage ?? null : null,
+        customLinkPreviewEnabled: messagingAllowed
+          ? body.customLinkPreviewEnabled ?? false
+          : false,
+        linkPreviewTitle: messagingAllowed
+          ? body.linkPreviewTitle ?? undefined
+          : undefined,
+        linkPreviewDescription: messagingAllowed
+          ? body.linkPreviewDescription ?? undefined
+          : undefined,
+        linkPreviewImage: messagingAllowed
+          ? body.linkPreviewImage ?? undefined
+          : undefined,
+        linkPreviewFavicon: messagingAllowed
+          ? body.linkPreviewFavicon ?? undefined
+          : undefined,
+        ctaLabel: messagingAllowed ? body.ctaLabel ?? undefined : undefined,
+        ctaUrl: messagingAllowed ? validatedCtaUrl ?? undefined : undefined,
+        ...layoutData,
         teamId: teamId,
+      },
+      update: {
+        logo: body.logo,
+        banner: body.banner,
+        brandColor: body.brandColor,
+        accentColor: body.accentColor,
+        accentButtonColor: body.accentButtonColor ?? null,
+        applyAccentColorToDataroomView:
+          body.applyAccentColorToDataroomView ?? false,
+        welcomeMessage: messagingAllowed ? body.welcomeMessage ?? null : undefined,
+        customLinkPreviewEnabled: messagingAllowed
+          ? body.customLinkPreviewEnabled
+          : undefined,
+        linkPreviewTitle: messagingAllowed ? body.linkPreviewTitle : undefined,
+        linkPreviewDescription: messagingAllowed
+          ? body.linkPreviewDescription
+          : undefined,
+        linkPreviewImage: messagingAllowed ? body.linkPreviewImage : undefined,
+        linkPreviewFavicon: messagingAllowed
+          ? body.linkPreviewFavicon
+          : undefined,
+        ctaLabel: messagingAllowed ? body.ctaLabel : undefined,
+        ctaUrl: messagingAllowed ? validatedCtaUrl : undefined,
+        ...layoutData,
       },
     });
 
-    // Cache the logo URL in Redis if logo exists
-    if (logo) {
-      await redis.set(`brand:logo:${teamId}`, logo);
+    if (body.logo) {
+      await redis.set(`brand:logo:${teamId}`, body.logo);
+    } else if (body.logo === null) {
+      await redis.del(`brand:logo:${teamId}`);
     }
 
     return res.status(200).json(brand);
   } else if (req.method === "PUT") {
     // PUT /api/teams/:teamId/branding
-    const {
-      logo,
-      banner,
-      brandColor,
-      accentColor,
-      applyAccentColorToDataroomView,
-      welcomeMessage,
-    } = req.body as {
-      logo?: string;
-      banner?: string;
-      brandColor?: string;
-      accentColor?: string;
-      applyAccentColorToDataroomView?: boolean;
-      welcomeMessage?: string;
-    };
+    const teamAuth = await prisma.team.findFirst({
+      where: {
+        id: teamId,
+        users: {
+          some: { userId: (session.user as CustomUser).id },
+        },
+      },
+      select: { plan: true },
+    });
+    if (!teamAuth) {
+      return res.status(403).end("Unauthorized to access this team");
+    }
+    const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(teamAuth.plan);
+    const layoutAllowed = teamPlanAllowsLayoutCustomization(teamAuth.plan);
 
-    // Use upsert to handle both create and update cases
+    const parsed = updateBrandingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid request body",
+        errors: parsed.error.flatten().fieldErrors,
+      });
+    }
+    const body = parsed.data;
+
+    const existingBrand = await prisma.brand.findUnique({
+      where: { teamId },
+    });
+
+    let validatedCtaUrl: string | null | undefined = body.ctaUrl;
+    if (messagingAllowed && typeof body.ctaUrl === "string") {
+      const ctaValidation = await validateRedirectUrl(body.ctaUrl, teamId);
+      if (!ctaValidation.valid) {
+        return res.status(400).json({ message: ctaValidation.message });
+      }
+      validatedCtaUrl = ctaValidation.url;
+    }
+
+    const resolvedWelcome = messagingAllowed
+      ? body.welcomeMessage ?? null
+      : (existingBrand?.welcomeMessage ?? null);
+    const resolvedCtaLabel = messagingAllowed
+      ? body.ctaLabel ?? null
+      : (existingBrand?.ctaLabel ?? null);
+    const resolvedCtaUrl = messagingAllowed
+      ? validatedCtaUrl ?? null
+      : (existingBrand?.ctaUrl ?? null);
+
+    const layoutData = layoutAllowed
+      ? sanitizeLayoutPayload({
+          cardLayout: body.cardLayout,
+          showFolderTree: body.showFolderTree,
+          viewerLayoutPreset: body.viewerLayoutPreset,
+          viewerHeaderStyle: body.viewerHeaderStyle,
+          hideFolderIconsInMain: body.hideFolderIconsInMain,
+        })
+      : {};
+
     const brand = await prisma.brand.upsert({
       where: {
         teamId: teamId,
       },
       create: {
-        logo,
-        banner,
-        brandColor,
-        accentColor,
-        applyAccentColorToDataroomView: !!applyAccentColorToDataroomView,
-        welcomeMessage,
+        logo: body.logo,
+        banner: body.banner,
+        brandColor: body.brandColor,
+        accentColor: body.accentColor,
+        accentButtonColor: body.accentButtonColor ?? undefined,
+        applyAccentColorToDataroomView: !!body.applyAccentColorToDataroomView,
+        welcomeMessage: messagingAllowed ? body.welcomeMessage ?? null : null,
+        customLinkPreviewEnabled: messagingAllowed
+          ? !!body.customLinkPreviewEnabled
+          : false,
+        linkPreviewTitle: messagingAllowed
+          ? body.linkPreviewTitle ?? undefined
+          : undefined,
+        linkPreviewDescription: messagingAllowed
+          ? body.linkPreviewDescription ?? undefined
+          : undefined,
+        linkPreviewImage: messagingAllowed
+          ? body.linkPreviewImage ?? undefined
+          : undefined,
+        linkPreviewFavicon: messagingAllowed
+          ? body.linkPreviewFavicon ?? undefined
+          : undefined,
+        ctaLabel: messagingAllowed ? body.ctaLabel ?? undefined : undefined,
+        ctaUrl: messagingAllowed ? validatedCtaUrl ?? undefined : undefined,
+        ...layoutData,
         teamId: teamId,
       },
       update: {
-        logo,
-        banner,
-        brandColor,
-        accentColor,
-        applyAccentColorToDataroomView: !!applyAccentColorToDataroomView,
-        welcomeMessage,
+        logo: body.logo,
+        banner: body.banner,
+        brandColor: body.brandColor,
+        accentColor: body.accentColor,
+        accentButtonColor: body.accentButtonColor ?? null,
+        applyAccentColorToDataroomView: !!body.applyAccentColorToDataroomView,
+        welcomeMessage: resolvedWelcome,
+        // Preserve stored link-preview settings on partial PUTs: only write
+        // these fields when they're explicitly present in the payload.
+        // Prisma skips updates for `undefined` values. Plans without messaging
+        // access cannot mutate any link-preview fields, so the stored value
+        // is preserved as-is.
+        customLinkPreviewEnabled: messagingAllowed
+          ? body.customLinkPreviewEnabled
+          : undefined,
+        linkPreviewTitle: messagingAllowed ? body.linkPreviewTitle : undefined,
+        linkPreviewDescription: messagingAllowed
+          ? body.linkPreviewDescription
+          : undefined,
+        linkPreviewImage: messagingAllowed ? body.linkPreviewImage : undefined,
+        linkPreviewFavicon: messagingAllowed
+          ? body.linkPreviewFavicon
+          : undefined,
+        ctaLabel: resolvedCtaLabel,
+        ctaUrl: resolvedCtaUrl,
+        ...layoutData,
       },
     });
 
     // Update logo in Redis cache
-    if (logo) {
-      await redis.set(`brand:logo:${teamId}`, logo);
+    if (body.logo) {
+      await redis.set(`brand:logo:${teamId}`, body.logo);
     } else {
       // If logo is null or undefined, delete the cache
       await redis.del(`brand:logo:${teamId}`);
@@ -151,25 +395,20 @@ export default async function handle(
       where: {
         teamId: teamId,
       },
-      select: { id: true, logo: true, banner: true },
+      select: { id: true, logo: true, banner: true, linkPreviewImage: true, linkPreviewFavicon: true },
     });
 
     if (brand) {
-      // delete the logo from vercel blob
-      if (brand.logo) {
-        await del(brand.logo);
-      }
-      // delete the banner from vercel blob
-      if (brand.banner) {
-        await del(brand.banner);
-      }
+      await Promise.all([
+        maybeDeleteBlobAsset(brand.logo),
+        maybeDeleteBlobAsset(brand.banner),
+        maybeDeleteBlobAsset((brand as any).linkPreviewImage),
+        maybeDeleteBlobAsset((brand as any).linkPreviewFavicon),
+      ]);
     }
 
-    // delete the branding from database
-    await prisma.brand.delete({
-      where: {
-        id: brand?.id,
-      },
+    await prisma.brand.deleteMany({
+      where: { teamId },
     });
 
     // Remove logo from Redis cache
