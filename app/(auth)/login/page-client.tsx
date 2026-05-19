@@ -100,18 +100,17 @@ export default function Login() {
               signIn("email", {
                 email: emailValidation.data,
                 redirect: false,
-                ...callbackUrl: searchParams?.get("next") || "/dashboard",
+                callbackUrl: searchParams?.get("next") || "/dashboard",
               }).then((res) => {
                 if (res?.ok && !res?.error) {
                   setLastUsed("credentials");
-                  // Store email in sessionStorage for the verification page
                   try {
                     sessionStorage.setItem(
                       "pendingVerificationEmail",
                       emailValidation.data,
                     );
                   } catch {
-                    // sessionStorage not available, verification page will show email input
+                    // sessionStorage not available
                   }
                   router.push("/auth/email");
                 } else {
@@ -133,7 +132,6 @@ export default function Login() {
               autoComplete="email"
               autoCorrect="off"
               disabled={clickedMethod === "email"}
-              // pattern={patternSimpleEmailRegex}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className={cn(
@@ -166,7 +164,7 @@ export default function Login() {
                   setClickedMethod("google");
                   setLastUsed("google");
                   signIn("google", {
-                    ...callbackUrl: searchParams?.get("next") || "/dashboard",
+                    callbackUrl: searchParams?.get("next") || "/dashboard",
                   }).then((res) => {
                     setClickedMethod(undefined);
                   });
@@ -188,7 +186,7 @@ export default function Login() {
                   setClickedMethod("linkedin");
                   setLastUsed("linkedin");
                   signIn("linkedin", {
-                    ...callbackUrl: searchParams?.get("next") || "/dashboard",
+                    callbackUrl: searchParams?.get("next") || "/dashboard",
                   }).then((res) => {
                     setClickedMethod(undefined);
                   });
