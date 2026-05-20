@@ -42,8 +42,11 @@ export const config = {
      * 3. /_static (inside /public)
      * 4. /_vercel (Vercel internals)
      * 5. /favicon.ico, /sitemap.xml, /robots.txt (static files)
+     * 6. /mcp and /mcp/ (remote MCP endpoint — does its own Bearer-token
+     *    auth and returns 401; must not be bounced to /login. End-anchored
+     *    so it matches only that exact path, not /mcp-oauth/*.)
      */
-    "/((?!api/|oauth/|\\.well-known/|_next/|_static|vendor|_icons|_vercel|favicon.ico|sitemap.xml|robots.txt).*)",
+    "/((?!api/|oauth/|mcp/?$|\\.well-known/|_next/|_static|vendor|_icons|_vercel|favicon.ico|sitemap.xml|robots.txt).*)",
   ],
 };
 
