@@ -1549,7 +1549,19 @@ export default function UploadZone({
       >();
       for (const raw of rawFiles) {
         const rel = (raw as any).webkitRelativePath || raw.name;
-        const top = rel.split("/")[0] ?? raw.name;
+        const segments = rel.split("/").filter((s: string) => s.length > 0);
+        const fileName = segments[segments.length - 1] ?? raw.name;
+        const top = segments[0] ?? raw.name;
+        // Silently skip OS-generated junk (.DS_Store, Thumbs.db, __MACOSX/*).
+        // These show up inside the picker's FileList even though the user
+        // never sees them; surfacing them as "unsupported" in the rejected
+        // list is just noise. Mirrors the drag-drop walker's behavior.
+        if (
+          isSystemFile(fileName) ||
+          segments.some((seg: string) => isSystemFile(seg))
+        ) {
+          continue;
+        }
         const candidate = inferMimeFromExtensionMap(
           raw,
           acceptableDropZoneFileTypes,
