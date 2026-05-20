@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useTeam } from "@/context/team-context";
+import { useUploadProgress } from "@/context/upload-progress-context";
 import { DocumentStorageType } from "@prisma/client";
 import { useSession } from "next-auth/react";
 import { DropEvent, FileRejection, useDropzone } from "react-dropzone";
@@ -16,6 +17,10 @@ import {
   SUPPORTED_DOCUMENT_MIME_TYPES,
 } from "@/lib/constants";
 import { DocumentData, createDocument } from "@/lib/documents/create-document";
+import {
+  MULTIPART_SIZE_THRESHOLD,
+  multipartUpload,
+} from "@/lib/files/multipart-upload";
 import { resumableUpload } from "@/lib/files/tus-upload";
 import {
   BulkFolderRequestItem,
@@ -159,6 +164,57 @@ function stripLeadingSlash(p: string | null | undefined): string | undefined {
 }
 
 /**
+ * Attempts to repair the MIME type of a `File` whose `type` was reported as
+ * empty by the browser (Firefox does this for files yielded from a folder
+ * picker). Looks up the file extension against the supplied accept map; if a
+ * matching entry is found, returns a new `File` with the inferred MIME so
+ * downstream size/plan checks and the eventual S3 upload all see the right
+ * content type. Mirrors the inference the drag-drop walker already performs.
+ */
+function inferMimeFromExtensionMap(
+  file: File,
+  acceptable: Record<string, readonly string[]>,
+): File {
+  if (file.type) return file;
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  if (!ext) return file;
+  for (const [mime, extsUntyped] of Object.entries(acceptable)) {
+    const exts = extsUntyped as readonly string[];
+    if (exts.some((e) => e.toLowerCase() === "." + ext)) {
+      return new File([file], file.name, {
+        type: mime,
+        lastModified: file.lastModified,
+      });
+    }
+  }
+  return file;
+}
+
+/**
+ * Mirrors react-dropzone's `accept` filtering for the folder-picker code
+ * path: a file is acceptable when its MIME matches a key in the accept map
+ * OR its extension matches one of the value-side extensions. The folder
+ * picker bypasses dropzone entirely, so without this gate a free-plan user
+ * could pick a folder containing paid-only file types and start the upload
+ * pipeline — bytes would land in S3 and only be rejected at document-
+ * creation time, after the upload had already happened.
+ */
+function isAcceptableForPlan(
+  file: File,
+  acceptable: Record<string, readonly string[]>,
+): boolean {
+  if (file.type && file.type in acceptable) return true;
+  const lowerName = file.name.toLowerCase();
+  const dotExt = "." + (lowerName.split(".").pop() ?? "");
+  for (const exts of Object.values(acceptable)) {
+    for (const e of exts as readonly string[]) {
+      if (e.toLowerCase() === dotExt) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Parent path (without leading slash) of a folder path expressed in the
  * client-side "no leading slash" format. Returns undefined when the parent is
  * the root (i.e. the path is empty, "/", or a single top-level segment) —
@@ -225,6 +281,14 @@ export default function UploadZone({
   const teamInfo = useTeam();
   const { data: session } = useSession();
   const { limits, canAddDocuments, isPaused } = useLimits();
+  const { registerUploadTriggers } = useUploadProgress();
+
+  // Refs to the two hidden file inputs rendered inside this zone. Used to
+  // open the OS picker without traversing the DOM by id, so callers
+  // (e.g. AddDocumentDropdown) can trigger uploads through context rather
+  // than reaching across scopes.
+  const filesInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const hasDocumentLimit = limits?.documents != null && limits.documents > 0;
   const remainingDocuments = hasDocumentLimit
     ? limits.documents - (limits?.usage?.documents ?? 0)
@@ -247,6 +311,19 @@ export default function UploadZone({
     dataroomFolderPathRef.current = null;
     dataroomFolderCreationPromiseRef.current = null;
   }, [replicateDataroomFolders, dataroomId]);
+
+  // Expose imperative picker triggers via context so the +Add dropdown
+  // (rendered in the page toolbar, outside this zone) can open the
+  // OS file picker without reaching into the DOM via `getElementById`.
+  // While disabled, we deliberately don't register — callers will fall
+  // back to their no-zone path (e.g. opening the single-file modal).
+  useEffect(() => {
+    if (disabled) return;
+    return registerUploadTriggers({
+      openFilesPicker: () => filesInputRef.current?.click(),
+      openFolderPicker: () => folderInputRef.current?.click(),
+    });
+  }, [registerUploadTriggers, disabled]);
 
   const fileSizeLimits = useMemo(
     () =>
@@ -346,6 +423,150 @@ export default function UploadZone({
   const endpointTargetType = dataroomId
     ? `datarooms/${dataroomId}/folders`
     : "folders";
+
+  // Shared bulk-folder-create helper used by both the drag-drop walker and the
+  // `<input webkitdirectory>` picker. Performs the same API calls, analytics,
+  // and SWR cache invalidation regardless of how the folder list was sourced.
+  const createFoldersForUpload = useCallback(
+    async (
+      allFolders: BulkFolderRequestItem[],
+    ): Promise<{
+      dataroomByTemp: Map<string, BulkFolderResultItem>;
+      mainDocsByTemp: Map<string, BulkFolderResultItem>;
+      dataroomFolderInMainDocsPath?: string;
+    } | null> => {
+      let dataroomByTemp = new Map<string, BulkFolderResultItem>();
+      let mainDocsByTemp = new Map<string, BulkFolderResultItem>();
+      let dataroomFolderInMainDocsPath: string | undefined;
+
+      const teamId = teamInfo?.currentTeam?.id;
+      if (!teamId) {
+        setRejectedFiles((prev) => [
+          { fileName: "Unknown Team", message: "Team Id not found" },
+          ...prev,
+        ]);
+        return null;
+      }
+
+      const rootPathForApi =
+        folderPathName && folderPathName.length > 0
+          ? "/" + folderPathName
+          : "/";
+
+      if (allFolders.length === 0) {
+        if (!replicateDataroomFolders && dataroomId && dataroomName) {
+          dataroomFolderInMainDocsPath = await getOrCreateDataroomFolder();
+        }
+        return {
+          dataroomByTemp,
+          mainDocsByTemp,
+          dataroomFolderInMainDocsPath,
+        };
+      }
+
+      try {
+        if (dataroomId) {
+          // Replicated copies in main docs always live at the team root,
+          // regardless of where in the dataroom the user dropped the tree.
+          const tasks: Promise<void>[] = [
+            bulkCreateFoldersChunked({
+              url: `/api/teams/${teamId}/datarooms/${dataroomId}/folders/bulk`,
+              rootPath: rootPathForApi,
+              folders: allFolders,
+            }).then((rows) => {
+              dataroomByTemp = new Map(rows.map((r) => [r.tempId, r]));
+            }),
+          ];
+          if (replicateDataroomFolders) {
+            tasks.push(
+              bulkCreateFoldersChunked({
+                url: `/api/teams/${teamId}/folders/bulk`,
+                rootPath: "/",
+                folders: allFolders,
+              }).then((rows) => {
+                mainDocsByTemp = new Map(rows.map((r) => [r.tempId, r]));
+              }),
+            );
+          } else if (dataroomName) {
+            dataroomFolderInMainDocsPath = await getOrCreateDataroomFolder();
+          }
+          await Promise.all(tasks);
+        } else {
+          const rows = await bulkCreateFoldersChunked({
+            url: `/api/teams/${teamId}/folders/bulk`,
+            rootPath: rootPathForApi,
+            folders: allFolders,
+          });
+          mainDocsByTemp = new Map(rows.map((r) => [r.tempId, r]));
+        }
+
+        analytics.capture("Folder Added (bulk)", {
+          count: allFolders.length,
+          dataroomId: dataroomId,
+          replicated: dataroomId ? replicateDataroomFolders : undefined,
+        });
+
+        // Broad one-shot revalidation of every cached folder/document key
+        // for this scope. See the original drag-drop branch for a longer
+        // rationale — this short-circuits the SWR cache staleness that
+        // otherwise lingers for deep paths after a bulk create.
+        const isDataroomFolderKey = (key: unknown) =>
+          typeof key === "string" &&
+          dataroomId !== undefined &&
+          (key.startsWith(
+            `/api/teams/${teamId}/datarooms/${dataroomId}/folders`,
+          ) ||
+            key.startsWith(
+              `/api/teams/${teamId}/datarooms/${dataroomId}/folder-documents`,
+            ) ||
+            key.startsWith(
+              `/api/teams/${teamId}/datarooms/${dataroomId}/documents`,
+            ));
+        const isMainDocsFolderKey = (key: unknown) =>
+          typeof key === "string" &&
+          (key.startsWith(`/api/teams/${teamId}/folders`) ||
+            key.startsWith(`/api/teams/${teamId}/folder-documents`) ||
+            key === `/api/teams/${teamId}/documents`);
+
+        if (dataroomId) {
+          mutate(isDataroomFolderKey);
+          if (replicateDataroomFolders) mutate(isMainDocsFolderKey);
+        } else {
+          mutate(isMainDocsFolderKey);
+        }
+
+        if (!replicateDataroomFolders && dataroomId && dataroomName) {
+          dataroomFolderInMainDocsPath = await getOrCreateDataroomFolder();
+        }
+
+        return {
+          dataroomByTemp,
+          mainDocsByTemp,
+          dataroomFolderInMainDocsPath,
+        };
+      } catch (error) {
+        console.error("Bulk folder creation failed:", error);
+        setRejectedFiles((prev) => [
+          ...allFolders.map((f) => ({
+            fileName: f.name,
+            message: "Failed to create the folder",
+          })),
+          ...prev,
+        ]);
+        return null;
+      }
+    },
+    [
+      teamInfo,
+      folderPathName,
+      dataroomId,
+      dataroomName,
+      replicateDataroomFolders,
+      getOrCreateDataroomFolder,
+      analytics,
+      setRejectedFiles,
+    ],
+  );
 
   const onDropRejected = useCallback(
     (rejectedFiles: FileRejection[]) => {
@@ -643,73 +864,108 @@ export default function UploadZone({
             }
           }
 
-          const { complete } = await resumableUpload({
-            file,
-            onProgress: (bytesUploaded, _bytesTotal) => {
-              fileBytesUploaded.set(file, bytesUploaded);
-              emitUpdate();
-            },
-            onError: () => {
-              failedCount++;
-              parentItem.failedEntries++;
-              setRejectedFiles((prev) => [
-                { fileName: file.name, message: "Error uploading file" },
-                ...prev,
-              ]);
-              emitUpdate();
-            },
-            ownerId: (session?.user as CustomUser).id,
-            teamId: teamInfo?.currentTeam?.id as string,
-            numPages,
-            relativePath: path.substring(0, path.lastIndexOf("/")),
-          });
+          // Files above the multipart threshold bypass the TUS Vercel
+          // function and PUT directly to S3 using pre-signed part URLs. TUS
+          // is still preferred for smaller files: each chunk is bounded by
+          // the function's `maxDuration`, but TUS's resumable behavior is
+          // valuable on flaky networks for the medium-file long tail.
+          const useMultipart =
+            process.env.NEXT_PUBLIC_UPLOAD_TRANSPORT === "s3" &&
+            file.size > MULTIPART_SIZE_THRESHOLD;
 
-          const uploadResult = await complete;
+          let storageKey: string;
+          let storageFileName: string;
+          let storageFileType: string;
+          let storageNumPages: number;
 
-          let contentType = uploadResult.fileType;
+          if (useMultipart) {
+            const result = await multipartUpload({
+              file,
+              teamId: teamInfo?.currentTeam?.id as string,
+              numPages,
+              contentType: file.type,
+              onProgress: (bytesUploaded) => {
+                fileBytesUploaded.set(file, bytesUploaded);
+                emitUpdate();
+              },
+            });
+            storageKey = result.key;
+            storageFileName = result.fileName;
+            storageFileType = result.fileType;
+            storageNumPages = result.numPages;
+          } else {
+            const { complete } = await resumableUpload({
+              file,
+              onProgress: (bytesUploaded, _bytesTotal) => {
+                fileBytesUploaded.set(file, bytesUploaded);
+                emitUpdate();
+              },
+              onError: () => {
+                failedCount++;
+                parentItem.failedEntries++;
+                setRejectedFiles((prev) => [
+                  { fileName: file.name, message: "Error uploading file" },
+                  ...prev,
+                ]);
+                emitUpdate();
+              },
+              ownerId: (session?.user as CustomUser).id,
+              teamId: teamInfo?.currentTeam?.id as string,
+              numPages,
+              relativePath: path.substring(0, path.lastIndexOf("/")),
+            });
+
+            const uploadResult = await complete;
+            storageKey = uploadResult.id;
+            storageFileName = uploadResult.fileName;
+            storageFileType = uploadResult.fileType;
+            storageNumPages = uploadResult.numPages;
+          }
+
+          let contentType = storageFileType;
           let supportedFileType = getSupportedContentType(contentType) ?? "";
 
           if (
-            uploadResult.fileName.endsWith(".dwg") ||
-            uploadResult.fileName.endsWith(".dxf")
+            storageFileName.endsWith(".dwg") ||
+            storageFileName.endsWith(".dxf")
           ) {
             supportedFileType = "cad";
-            contentType = `image/vnd.${uploadResult.fileName.split(".").pop()}`;
+            contentType = `image/vnd.${storageFileName.split(".").pop()}`;
           }
 
-          if (uploadResult.fileName.endsWith(".xlsm")) {
+          if (storageFileName.endsWith(".xlsm")) {
             supportedFileType = "sheet";
             contentType = "application/vnd.ms-excel.sheet.macroEnabled.12";
           }
 
           if (
-            uploadResult.fileName.endsWith(".kml") ||
-            uploadResult.fileName.endsWith(".kmz")
+            storageFileName.endsWith(".kml") ||
+            storageFileName.endsWith(".kmz")
           ) {
             supportedFileType = "map";
-            contentType = `application/vnd.google-earth.${uploadResult.fileName.endsWith(".kml") ? "kml+xml" : "kmz"}`;
+            contentType = `application/vnd.google-earth.${storageFileName.endsWith(".kml") ? "kml+xml" : "kmz"}`;
           }
 
           if (
-            uploadResult.fileName.endsWith(".tif") ||
-            uploadResult.fileName.endsWith(".tiff")
+            storageFileName.endsWith(".tif") ||
+            storageFileName.endsWith(".tiff")
           ) {
             supportedFileType = "other";
             contentType = "image/tiff";
           }
 
-          if (uploadResult.fileName.endsWith(".ecw")) {
+          if (storageFileName.endsWith(".ecw")) {
             supportedFileType = "other";
             contentType = "image/x-ecw";
           }
 
-          if (uploadResult.fileName.endsWith(".bak")) {
+          if (storageFileName.endsWith(".bak")) {
             supportedFileType = "other";
             contentType = "application/x-bak";
           }
 
           const documentData: DocumentData = {
-            key: uploadResult.id,
+            key: storageKey,
             supportedFileType: supportedFileType,
             name: file.name,
             storageType: DocumentStorageType.S3_PATH,
@@ -723,7 +979,7 @@ export default function UploadZone({
           const response = await createDocument({
             documentData,
             teamId: teamInfo?.currentTeam?.id as string,
-            numPages: uploadResult.numPages,
+            numPages: storageNumPages,
             folderPathName: fileUploadPathName,
           });
 
@@ -1097,103 +1353,10 @@ export default function UploadZone({
       const allFiles = walkResults.flatMap((r) => r.files);
 
       // ----- Bulk-create folders (one request per scope, in parallel).
-      let dataroomByTemp = new Map<string, BulkFolderResultItem>();
-      let mainDocsByTemp = new Map<string, BulkFolderResultItem>();
-
-      const rootPathForApi =
-        folderPathName && folderPathName.length > 0
-          ? "/" + folderPathName
-          : "/";
-
-      if (allFolders.length > 0) {
-        try {
-          if (dataroomId) {
-            // Replicated copies in main docs always live at the team root,
-            // regardless of where in the dataroom the user dropped the tree.
-            const tasks: Promise<void>[] = [
-              bulkCreateFoldersChunked({
-                url: `/api/teams/${teamId}/datarooms/${dataroomId}/folders/bulk`,
-                rootPath: rootPathForApi,
-                folders: allFolders,
-              }).then((rows) => {
-                dataroomByTemp = new Map(rows.map((r) => [r.tempId, r]));
-              }),
-            ];
-            if (replicateDataroomFolders) {
-              tasks.push(
-                bulkCreateFoldersChunked({
-                  url: `/api/teams/${teamId}/folders/bulk`,
-                  rootPath: "/",
-                  folders: allFolders,
-                }).then((rows) => {
-                  mainDocsByTemp = new Map(rows.map((r) => [r.tempId, r]));
-                }),
-              );
-            } else if (dataroomName) {
-              await getOrCreateDataroomFolder();
-            }
-            await Promise.all(tasks);
-          } else {
-            const rows = await bulkCreateFoldersChunked({
-              url: `/api/teams/${teamId}/folders/bulk`,
-              rootPath: rootPathForApi,
-              folders: allFolders,
-            });
-            mainDocsByTemp = new Map(rows.map((r) => [r.tempId, r]));
-          }
-
-          analytics.capture("Folder Added (bulk)", {
-            count: allFolders.length,
-            dataroomId: dataroomId,
-            replicated: dataroomId ? replicateDataroomFolders : undefined,
-          });
-
-          // Broad one-shot revalidation of every cached folder/document key
-          // for this scope. Targeted mutates only cover root + the user's
-          // current view, which leaves deep paths the user navigated to
-          // *during* bulk-create stuck on whatever empty/404 response SWR
-          // fetched while the transaction was still in flight (SWR has
-          // revalidateOnFocus: false + dedupingInterval: 30s, so the stale
-          // cache otherwise persists). mutate(filterFn) only refetches keys
-          // already in cache — typically 2–10 keys, fired once at the end of
-          // bulkCreateFolders, not per file — so the "GET burst" cost is
-          // negligible and bounded.
-          const isDataroomFolderKey = (key: unknown) =>
-            typeof key === "string" &&
-            dataroomId !== undefined &&
-            (key.startsWith(
-              `/api/teams/${teamId}/datarooms/${dataroomId}/folders`,
-            ) ||
-              key.startsWith(
-                `/api/teams/${teamId}/datarooms/${dataroomId}/folder-documents`,
-              ) ||
-              key.startsWith(
-                `/api/teams/${teamId}/datarooms/${dataroomId}/documents`,
-              ));
-          const isMainDocsFolderKey = (key: unknown) =>
-            typeof key === "string" &&
-            (key.startsWith(`/api/teams/${teamId}/folders`) ||
-              key.startsWith(`/api/teams/${teamId}/folder-documents`) ||
-              key === `/api/teams/${teamId}/documents`);
-
-          if (dataroomId) {
-            mutate(isDataroomFolderKey);
-            if (replicateDataroomFolders) mutate(isMainDocsFolderKey);
-          } else {
-            mutate(isMainDocsFolderKey);
-          }
-        } catch (error) {
-          console.error("Bulk folder creation failed:", error);
-          setRejectedFiles((prev) => [
-            ...allFolders.map((f) => ({
-              fileName: f.name,
-              message: "Failed to create the folder",
-            })),
-            ...prev,
-          ]);
-          return [];
-        }
-      }
+      const bulkCreateResult = await createFoldersForUpload(allFolders);
+      if (!bulkCreateResult) return [];
+      const { dataroomByTemp, mainDocsByTemp, dataroomFolderInMainDocsPath } =
+        bulkCreateResult;
 
       // Per-top-level folder count for the upload-drawer progress bar.
       const parentByTemp = new Map(
@@ -1211,12 +1374,6 @@ export default function UploadZone({
           topLevel,
           (folderCountByTopLevelTempId.get(topLevel) ?? 0) + 1,
         );
-      }
-
-      // ----- Resolve files (read content + annotate).
-      let dataroomFolderInMainDocsPath: string | undefined;
-      if (!replicateDataroomFolders && dataroomId && dataroomName) {
-        dataroomFolderInMainDocsPath = await getOrCreateDataroomFolder();
       }
 
       const filesToBePassedToOnDrop: FileWithPaths[] = [];
@@ -1321,15 +1478,277 @@ export default function UploadZone({
       teamInfo,
       dataroomId,
       dataroomName,
-      analytics,
       setRejectedFiles,
       acceptableDropZoneFileTypes,
-      getOrCreateDataroomFolder,
       hasDocumentLimit,
       remainingDocuments,
       fileSizeLimits,
       replicateDataroomFolders,
       onTraversalStart,
+      createFoldersForUpload,
+    ],
+  );
+
+  // Handle the `<input webkitdirectory>` change event: builds a folder tree
+  // from each File's `webkitRelativePath`, bulk-creates the folders, annotates
+  // the files with the same metadata produced by the drag-drop walker, then
+  // hands them off to `onDrop`. Used by the dedicated folder-upload control
+  // in the +Add menu since `<input type="file">` alone cannot preserve
+  // hierarchy.
+  const handleFolderPickerChange = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const rawFiles = Array.from(event.target.files ?? []);
+      // Reset value so the same folder can be re-picked.
+      event.target.value = "";
+
+      if (rawFiles.length === 0) return;
+
+      fileLimitTruncatedRef.current = false;
+      const maxFilesPerUpload = fileSizeLimits.maxFiles ?? 150;
+      const planDocumentLimit =
+        hasDocumentLimit && isFinite(remainingDocuments)
+          ? Math.max(0, remainingDocuments)
+          : Infinity;
+      const fileLimit = Math.min(maxFilesPerUpload, planDocumentLimit);
+
+      if (fileLimit <= 0) {
+        onUploadAborted?.();
+        return;
+      }
+
+      // Surface the top-level folder name(s) immediately so the progress
+      // drawer can render before we await the bulk-create round-trip.
+      const topLevelNames: string[] = [];
+      const seenTopLevel = new Set<string>();
+      for (const f of rawFiles) {
+        const rel = (f as any).webkitRelativePath || f.name;
+        const top = rel.split("/")[0];
+        if (top && !seenTopLevel.has(top)) {
+          seenTopLevel.add(top);
+          topLevelNames.push(top);
+        }
+      }
+      onTraversalStart?.(
+        topLevelNames.map((name) => ({ name, isFolder: true })),
+      );
+
+      // Filter against the plan's accept map BEFORE we create any folders
+      // server-side or sign any S3 uploads. The folder picker bypasses
+      // react-dropzone's `accept` validation that the drag-drop and
+      // multi-file flows rely on, so without this gate a free-plan user
+      // could pick a folder containing paid-only file types (e.g. .docx,
+      // .pptx) and walk the whole upload pipeline — bytes would PUT to S3
+      // and only be rejected at document-creation time. Also handles the
+      // Firefox empty-MIME folder-picker case the same way the drag-drop
+      // walker does so consistent files reach `onDrop`.
+      const inputFiles: File[] = [];
+      const relByFile = new Map<File, string>();
+      const rejectedTypePerTopLevel = new Map<
+        string,
+        { paths: string[]; supportedOnPaid: boolean }
+      >();
+      for (const raw of rawFiles) {
+        const rel = (raw as any).webkitRelativePath || raw.name;
+        const top = rel.split("/")[0] ?? raw.name;
+        const candidate = inferMimeFromExtensionMap(
+          raw,
+          acceptableDropZoneFileTypes,
+        );
+        if (!isAcceptableForPlan(candidate, acceptableDropZoneFileTypes)) {
+          const supportedOnPaid = isAcceptableForPlan(
+            candidate,
+            allAcceptableDropZoneMimeTypes,
+          );
+          const entry = rejectedTypePerTopLevel.get(top) ?? {
+            paths: [],
+            supportedOnPaid: false,
+          };
+          entry.paths.push(rel);
+          // Treat the group as "paid-only" if ANY rejected file in it would
+          // be accepted on a paid plan — surfaces the upgrade-friendly
+          // message instead of a generic "unsupported" one.
+          entry.supportedOnPaid = entry.supportedOnPaid || supportedOnPaid;
+          rejectedTypePerTopLevel.set(top, entry);
+          continue;
+        }
+        inputFiles.push(candidate);
+        relByFile.set(candidate, rel);
+      }
+
+      if (rejectedTypePerTopLevel.size > 0) {
+        const rejectedEntries: RejectedFile[] = [];
+        for (const [name, { paths, supportedOnPaid }] of rejectedTypePerTopLevel) {
+          rejectedEntries.push({
+            fileName: `${name}: ${paths.length} file${
+              paths.length !== 1 ? "s" : ""
+            } not uploaded`,
+            message:
+              isFree && !isTrial && supportedOnPaid
+                ? "File type not supported on free plan"
+                : "File type not supported",
+            reason: "plan-limit",
+            skippedFileNames: paths,
+          });
+        }
+        setRejectedFiles((prev) => [...rejectedEntries, ...prev]);
+      }
+
+      if (inputFiles.length === 0) {
+        onUploadAborted?.();
+        return;
+      }
+
+      // Build folder graph from webkitRelativePath segments. Driven by the
+      // validated `inputFiles` so folders that contained only rejected
+      // files don't get created server-side.
+      const folderTempIdByPath = new Map<string, string>();
+      const topLevelTempIdByName = new Map<string, string>();
+      const allFolders: BulkFolderRequestItem[] = [];
+
+      for (const file of inputFiles) {
+        const rel = relByFile.get(file)!;
+        const parts = rel.split("/").filter((s: string) => s.length > 0);
+        if (parts.length < 2) continue;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const segment = parts[i];
+          if (isSystemFile(segment) || segment.trim() === "") continue;
+          const folderPath = parts.slice(0, i + 1).join("/");
+          if (folderTempIdByPath.has(folderPath)) continue;
+          const parentPath = i > 0 ? parts.slice(0, i).join("/") : null;
+          const parentTempId = parentPath
+            ? (folderTempIdByPath.get(parentPath) ?? null)
+            : null;
+          const tempId = crypto.randomUUID();
+          folderTempIdByPath.set(folderPath, tempId);
+          if (i === 0) topLevelTempIdByName.set(segment, tempId);
+          allFolders.push({ tempId, name: segment, parentTempId });
+        }
+      }
+
+      const bulkCreateResult = await createFoldersForUpload(allFolders);
+      if (!bulkCreateResult) {
+        onUploadAborted?.();
+        return;
+      }
+      const { dataroomByTemp, mainDocsByTemp, dataroomFolderInMainDocsPath } =
+        bulkCreateResult;
+
+      // Per-top-level folder count for the upload-drawer progress bar.
+      const parentByTemp = new Map(
+        allFolders.map((f) => [f.tempId, f.parentTempId ?? null]),
+      );
+      const folderCountByTopLevelTempId = new Map<string, number>();
+      for (const f of allFolders) {
+        let cur: string | null = f.parentTempId ?? null;
+        let topLevel = f.tempId;
+        while (cur) {
+          topLevel = cur;
+          cur = parentByTemp.get(cur) ?? null;
+        }
+        folderCountByTopLevelTempId.set(
+          topLevel,
+          (folderCountByTopLevelTempId.get(topLevel) ?? 0) + 1,
+        );
+      }
+
+      const annotated: FileWithPaths[] = [];
+      const skippedPerTopLevel = new Map<string, string[]>();
+
+      for (let i = 0; i < inputFiles.length; i++) {
+        const file = inputFiles[i] as FileWithPaths;
+        const rel = relByFile.get(file) ?? (file as any).webkitRelativePath ?? file.name;
+        const parts: string[] = rel
+          .split("/")
+          .filter((s: string) => s.length > 0);
+        const fileName = parts[parts.length - 1] ?? file.name;
+        if (isSystemFile(fileName)) continue;
+
+        if (annotated.length >= fileLimit) {
+          const top = parts[0] ?? file.name;
+          const list = skippedPerTopLevel.get(top) ?? [];
+          list.push(rel);
+          skippedPerTopLevel.set(top, list);
+          fileLimitTruncatedRef.current = true;
+          continue;
+        }
+
+        const parentFolderPath =
+          parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+        const parentTempId = parentFolderPath
+          ? (folderTempIdByPath.get(parentFolderPath) ?? null)
+          : null;
+        const topLevelName = parts[0] ?? file.name;
+        const topLevelTempId = topLevelTempIdByName.get(topLevelName) ?? null;
+        const isFolderUpload = parts.length > 1;
+
+        file.path = rel;
+
+        const mainDocsFolderPath = parentTempId
+          ? stripLeadingSlash(mainDocsByTemp.get(parentTempId)?.path)
+          : folderPathName;
+        const dataroomFolderPath = parentTempId
+          ? stripLeadingSlash(dataroomByTemp.get(parentTempId)?.path)
+          : folderPathName;
+
+        if (!replicateDataroomFolders && dataroomId && dataroomName) {
+          file.whereToUploadPath = dataroomFolderInMainDocsPath;
+        } else {
+          file.whereToUploadPath = mainDocsFolderPath;
+        }
+        file.dataroomUploadPath = dataroomId ? dataroomFolderPath : undefined;
+
+        file.topLevelItemName = topLevelName;
+        file.topLevelItemIsFolder = isFolderUpload;
+        if (topLevelTempId) {
+          file.topLevelItemFolderCount =
+            folderCountByTopLevelTempId.get(topLevelTempId) ?? 0;
+          const topLevelDataroom = dataroomByTemp.get(topLevelTempId);
+          const topLevelMainDocs = mainDocsByTemp.get(topLevelTempId);
+          file.topLevelItemFolderPath = dataroomId
+            ? stripLeadingSlash(topLevelDataroom?.path)
+            : stripLeadingSlash(topLevelMainDocs?.path);
+          file.topLevelDataroomFolderId = topLevelDataroom?.id;
+        }
+
+        annotated.push(file);
+      }
+
+      if (skippedPerTopLevel.size > 0) {
+        const skippedEntries: RejectedFile[] = [];
+        for (const [name, paths] of skippedPerTopLevel) {
+          skippedEntries.push({
+            fileName: `${name}: ${paths.length} file${paths.length !== 1 ? "s" : ""} not uploaded`,
+            message: "Document limit reached",
+            reason: "plan-limit",
+            skippedFileNames: paths,
+          });
+        }
+        setRejectedFiles((prev) => [...skippedEntries, ...prev]);
+      }
+
+      if (annotated.length === 0) {
+        onUploadAborted?.();
+        return;
+      }
+
+      await onDrop(annotated);
+    },
+    [
+      acceptableDropZoneFileTypes,
+      folderPathName,
+      dataroomId,
+      dataroomName,
+      replicateDataroomFolders,
+      fileSizeLimits,
+      hasDocumentLimit,
+      remainingDocuments,
+      isFree,
+      isTrial,
+      onDrop,
+      onTraversalStart,
+      onUploadAborted,
+      setRejectedFiles,
+      createFoldersForUpload,
     ],
   );
 
@@ -1346,6 +1765,31 @@ export default function UploadZone({
     noDrag: disabled,
     noDragEventsBubbling: disabled,
   });
+
+  // Forward the dropzone's internal input ref into our own ref alongside it,
+  // so dropzone's `open()` / cancel-detection paths keep working AND our
+  // context-based picker triggers can call `.click()` on the same node.
+  // `DropzoneInputProps` doesn't type the `ref` field that `getInputProps()`
+  // returns at runtime, so we narrow the shape explicitly here.
+  const dropzoneFilesInputProps = getInputProps() as ReturnType<
+    typeof getInputProps
+  > & {
+    ref?: React.Ref<HTMLInputElement>;
+  };
+  const setFilesInputNode = useCallback(
+    (node: HTMLInputElement | null) => {
+      filesInputRef.current = node;
+      const dropzoneRef = dropzoneFilesInputProps.ref;
+      if (typeof dropzoneRef === "function") {
+        (dropzoneRef as React.RefCallback<HTMLInputElement>)(node);
+      } else if (dropzoneRef) {
+        (
+          dropzoneRef as React.MutableRefObject<HTMLInputElement | null>
+        ).current = node;
+      }
+    },
+    [dropzoneFilesInputProps.ref],
+  );
 
   return (
     <div
@@ -1364,10 +1808,29 @@ export default function UploadZone({
         )}
       >
         <input
-          {...getInputProps()}
+          {...dropzoneFilesInputProps}
+          ref={setFilesInputNode}
           name="file"
           id="upload-multi-files-zone"
           className="sr-only"
+        />
+
+        {/* Dedicated folder picker (preserves directory hierarchy via
+            `webkitRelativePath`). Triggered programmatically from the +Add
+            menu; the dropzone's regular input above keeps flat-file behavior.
+            `webkitdirectory` / `directory` are non-standard so we spread them
+            past the typed props. */}
+        <input
+          ref={folderInputRef}
+          type="file"
+          multiple
+          id="upload-folder-zone"
+          className="sr-only"
+          onChange={handleFolderPickerChange}
+          disabled={disabled}
+          aria-hidden="true"
+          tabIndex={-1}
+          {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
         />
 
         {isDragActive && (

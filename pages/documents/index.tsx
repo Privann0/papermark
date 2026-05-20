@@ -3,16 +3,15 @@ import { useRouter } from "next/router";
 import Link from "next/link";
 
 import { useTeam } from "@/context/team-context";
-import { EyeOffIcon, FolderPlusIcon, PlusIcon } from "lucide-react";
+import { EyeOffIcon } from "lucide-react";
 
 import useDocuments, { useHiddenDocuments, useRootFolders } from "@/lib/swr/use-documents";
 import { handleInvitationStatus } from "@/lib/utils";
 
-import { AddDocumentModal } from "@/components/documents/add-document-modal";
+import { AddDocumentDropdown } from "@/components/documents/add-document-dropdown";
 import { DocumentsList } from "@/components/documents/documents-list";
 import SortButton from "@/components/documents/filters/sort-button";
 import { Pagination } from "@/components/documents/pagination";
-import { AddFolderModal } from "@/components/folders/add-folder-modal";
 import AppLayout from "@/components/layouts/app";
 import { SearchBoxPersisted } from "@/components/search-box";
 import { Button } from "@/components/ui/button";
@@ -76,27 +75,7 @@ export default function Documents() {
             </p>
           </div>
           <div className="flex items-center gap-x-2">
-            <AddDocumentModal>
-              <Button
-                className="group flex flex-1 items-center justify-start gap-x-1 whitespace-nowrap px-1 text-left sm:gap-x-3 sm:px-3"
-                title="Add Document"
-              >
-                <PlusIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
-                <span className="text-xs sm:text-base">Add Document</span>
-              </Button>
-            </AddDocumentModal>
-            <AddFolderModal>
-              <Button
-                size="icon"
-                variant="outline"
-                className="border-gray-500 bg-gray-50 hover:bg-gray-200 dark:bg-black hover:dark:bg-muted"
-              >
-                <FolderPlusIcon
-                  className="h-5 w-5 shrink-0"
-                  aria-hidden="true"
-                />
-              </Button>
-            </AddFolderModal>
+            <AddDocumentDropdown variant="split" />
           </div>
         </section>
 

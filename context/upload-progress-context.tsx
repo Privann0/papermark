@@ -8,11 +8,25 @@ import {
 } from "react";
 
 import { UploadNotificationDrawer } from "@/components/upload-notification";
-import {
+// Type-only import so adding the reverse runtime dependency (UploadZone
+// importing this context) doesn't create a runtime circular import.
+import type {
   RejectedFile,
   UploadBatchState,
   UploadItemState,
 } from "@/components/upload-zone";
+
+/**
+ * Imperative triggers exposed by a mounted `UploadZone` so that callers
+ * elsewhere in the tree (e.g. the +Add dropdown rendered in the page
+ * toolbar) can open the file/folder picker without reaching into the DOM
+ * via `document.getElementById`. `null` when no zone is currently mounted
+ * — callers should fall back gracefully (e.g. open the single-file modal).
+ */
+export interface UploadZoneTriggers {
+  openFilesPicker: () => void;
+  openFolderPicker: () => void;
+}
 
 interface UploadProgressContextType {
   uploadBatch: UploadBatchState | null;
@@ -28,6 +42,19 @@ interface UploadProgressContextType {
   cancelItem: (itemId: string) => void;
   cancelledItemIds: Set<string>;
   cancelledItemIdsRef: React.RefObject<Set<string>>;
+  /**
+   * Triggers registered by the currently-mounted `UploadZone`, or `null`
+   * if none is mounted in the visible tree (e.g. while the dataroom search
+   * results are showing instead of the items list).
+   */
+  uploadTriggers: UploadZoneTriggers | null;
+  /**
+   * Registers the given triggers and returns an unregister function.
+   * Last-mount-wins; the unregister fn only clears state if the currently
+   * registered object is still the same one we registered (so a late
+   * unmount can't wipe out a newer registration).
+   */
+  registerUploadTriggers: (triggers: UploadZoneTriggers) => () => void;
 }
 
 const UploadProgressContext = createContext<UploadProgressContextType | null>(
@@ -62,6 +89,23 @@ export function UploadProgressProvider({
   );
   const cancelledItemIdsRef = useRef(cancelledItemIds);
   cancelledItemIdsRef.current = cancelledItemIds;
+
+  const [uploadTriggers, setUploadTriggers] =
+    useState<UploadZoneTriggers | null>(null);
+
+  const registerUploadTriggers = useCallback(
+    (triggers: UploadZoneTriggers) => {
+      setUploadTriggers(triggers);
+      return () => {
+        // Identity guard: only clear if the same object is still registered.
+        // Prevents a late unmount from wiping out a newer registration.
+        setUploadTriggers((current) =>
+          current === triggers ? null : current,
+        );
+      };
+    },
+    [],
+  );
 
   const addCancelFn = useCallback((fn: () => void) => {
     cancelFnsRef.current.push(fn);
@@ -168,6 +212,8 @@ export function UploadProgressProvider({
       cancelItem,
       cancelledItemIds,
       cancelledItemIdsRef,
+      uploadTriggers,
+      registerUploadTriggers,
     }),
     [
       uploadBatch,
@@ -178,6 +224,8 @@ export function UploadProgressProvider({
       addCancelFn,
       cancelItem,
       cancelledItemIds,
+      uploadTriggers,
+      registerUploadTriggers,
     ],
   );
 

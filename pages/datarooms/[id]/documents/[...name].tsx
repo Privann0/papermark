@@ -3,7 +3,7 @@ import { useRouter } from "next/router";
 import { useState } from "react";
 
 import { useTeam } from "@/context/team-context";
-import { ArrowUpDownIcon, FolderPlusIcon, PlusIcon } from "lucide-react";
+import { ArrowUpDownIcon } from "lucide-react";
 
 import {
   useDataroom,
@@ -19,9 +19,8 @@ import { DataroomItemsList } from "@/components/datarooms/dataroom-items-list";
 import { DataroomSearchResults } from "@/components/datarooms/dataroom-search-results";
 import { SidebarFolderTree } from "@/components/datarooms/folders";
 import { DataroomSortableList } from "@/components/datarooms/sortable/sortable-list";
-import { AddDocumentModal } from "@/components/documents/add-document-modal";
+import { AddDocumentDropdown } from "@/components/documents/add-document-dropdown";
 import { LoadingDocuments } from "@/components/documents/loading-document";
-import { AddFolderModal } from "@/components/folders/add-folder-modal";
 import AppLayout from "@/components/layouts/app";
 import { SearchBoxPersisted } from "@/components/search-box";
 import { Button } from "@/components/ui/button";
@@ -77,44 +76,11 @@ export default function Documents() {
               </div>
               <div className="flex shrink-0 items-center gap-x-2">
                 {!dataroom?.isFrozen && (
-                  <>
-                    <AddDocumentModal
-                      isDataroom={true}
-                      dataroomId={dataroom?.id}
-                      key={1}
-                    >
-                      <Button
-                        size="sm"
-                        className="group flex items-center justify-start gap-x-1 whitespace-nowrap px-2 text-left sm:gap-x-3 sm:px-3"
-                        title="Add Document"
-                      >
-                        <PlusIcon
-                          className="h-4 w-4 shrink-0 sm:h-5 sm:w-5"
-                          aria-hidden="true"
-                        />
-                        <span className="text-xs sm:text-sm">
-                          Add Document
-                        </span>
-                      </Button>
-                    </AddDocumentModal>
-                    <AddFolderModal
-                      isDataroom={true}
-                      dataroomId={dataroom?.id}
-                      key={2}
-                    >
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="group flex shrink-0 items-center justify-start gap-x-3 whitespace-nowrap px-3 text-left"
-                      >
-                        <FolderPlusIcon
-                          className="h-5 w-5 shrink-0"
-                          aria-hidden="true"
-                        />
-                        <span>Add Folder</span>
-                      </Button>
-                    </AddFolderModal>
-                  </>
+                  <AddDocumentDropdown
+                    isDataroom={true}
+                    dataroomId={dataroom?.id}
+                    size="sm"
+                  />
                 )}
                 <div id="dataroom-reordering-action" className="shrink-0">
                   {!isReordering && !dataroom?.isFrozen ? (
