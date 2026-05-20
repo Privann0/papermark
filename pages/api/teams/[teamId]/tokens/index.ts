@@ -216,6 +216,109 @@ export default async function handle(
       console.error(error);
       return res.status(500).json({ error: "Error creating token" });
     }
+  } else if (req.method === "PATCH") {
+    try {
+      const session = await getServerSession(req, res, authOptions);
+      if (!session) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { teamId } = req.query as { teamId: string };
+      const {
+        tokenId,
+        name,
+        scopes,
+      } = req.body as {
+        tokenId?: string;
+        name?: string;
+        scopes?: string[] | string;
+      };
+      const userId = (session.user as CustomUser).id;
+
+      if (!tokenId || typeof tokenId !== "string") {
+        return res.status(400).json({ error: "tokenId is required" });
+      }
+
+      const userTeam = await prisma.userTeam.findUnique({
+        where: { userId_teamId: { userId, teamId } },
+        select: { role: true },
+      });
+      if (!userTeam) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+
+      const existing = await prisma.restrictedToken.findFirst({
+        where: { id: tokenId, teamId, source: "dashboard" },
+        select: { id: true, userId: true },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Token not found" });
+      }
+
+      // Only admins or the token's owner may edit it.
+      if (userTeam.role !== "ADMIN" && existing.userId !== userId) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+
+      const data: { name?: string; scopes?: string } = {};
+
+      if (typeof name !== "undefined") {
+        if (typeof name !== "string" || name.trim().length === 0) {
+          return res.status(400).json({ error: "Name is required" });
+        }
+        data.name = name.trim();
+      }
+
+      if (typeof scopes !== "undefined") {
+        const ALLOWED_SCOPES: readonly string[] = [
+          ...PRESET_SCOPES,
+          ...GRANULAR_SCOPES,
+        ];
+        const rawScopesList = Array.isArray(scopes)
+          ? scopes
+          : typeof scopes === "string"
+            ? scopes.split(/[\s,]+/).filter(Boolean)
+            : [];
+        const scopesList = rawScopesList.map((s) =>
+          s === "full-access" ? "apis.all" : s,
+        );
+        if (scopesList.length === 0) {
+          return res.status(400).json({
+            error:
+              "At least one scope is required. Use `apis.all` for full access or `apis.read` for read-only.",
+          });
+        }
+        const invalid = scopesList.filter((s) => !ALLOWED_SCOPES.includes(s));
+        if (invalid.length > 0) {
+          return res
+            .status(400)
+            .json({ error: `Invalid scope(s): ${invalid.join(", ")}` });
+        }
+        let normalizedScopes: string[];
+        if (scopesList.includes("apis.all")) {
+          normalizedScopes = ["apis.all"];
+        } else if (scopesList.includes("apis.read")) {
+          normalizedScopes = ["apis.read"];
+        } else {
+          normalizedScopes = Array.from(new Set(scopesList));
+        }
+        data.scopes = normalizedScopes.join(" ");
+      }
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "No fields to update" });
+      }
+
+      await prisma.restrictedToken.update({
+        where: { id: tokenId },
+        data,
+      });
+
+      return res.status(200).json({ message: "Token updated successfully" });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ error: "Error updating token" });
+    }
   } else if (req.method === "DELETE") {
     try {
       const session = await getServerSession(req, res, authOptions);
@@ -267,7 +370,7 @@ export default async function handle(
       return res.status(500).json({ error: "Error deleting token" });
     }
   } else {
-    res.setHeader("Allow", ["GET", "POST", "DELETE"]);
+    res.setHeader("Allow", ["GET", "POST", "PATCH", "DELETE"]);
     return res.status(405).json({ error: "Method not allowed" });
   }
 }
