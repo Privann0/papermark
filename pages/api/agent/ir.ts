@@ -62,8 +62,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     take: 500,
     select: {
       id: true, viewedAt: true, viewerEmail: true, viewerName: true,
-      totalDuration: true, completionRate: true,
-      linkId: true, documentId: true,
+      linkId: true, documentId: true, dataroomId: true, verified: true,
+      viewType: true,
       link: { select: { name: true, slug: true } },
       document: { select: { name: true } },
     },
@@ -77,36 +77,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!viewerMap[key]) {
       viewerMap[key] = {
         email: v.viewerEmail, name: v.viewerName ?? undefined,
-        views: 0, totalDuration: 0, completionSum: 0,
-        lastSeen: v.viewedAt, documents: new Set(), links: new Set(),
+        views: 0, lastSeen: v.viewedAt,
+        documents: new Set(), links: new Set(), datarooms: new Set(),
       };
     }
     const vm = viewerMap[key];
     vm.views++;
-    vm.totalDuration += v.totalDuration ?? 0;
-    vm.completionSum += v.completionRate ?? 0;
     if (v.viewedAt > vm.lastSeen) vm.lastSeen = v.viewedAt;
     if (v.documentId) vm.documents.add(v.documentId);
     if (v.linkId) vm.links.add(v.linkId);
+    if (v.dataroomId) vm.datarooms.add(v.dataroomId);
   }
 
   const scoredViewers = Object.values(viewerMap).map((vm: any) => {
     const daysAgo = (Date.now() - new Date(vm.lastSeen).getTime()) / 86400000;
-    const avgCompletion = vm.completionSum / vm.views;
-    const recencyScore = Math.max(0, 40 - daysAgo * 2);
-    const durationScore = Math.min(20, (vm.totalDuration / 60000) * 2);
-    const completionScore = (avgCompletion / 100) * 20;
-    const depthScore = Math.min(20, (vm.documents.size + vm.links.size) * 4);
-    const score = Math.round(recencyScore + durationScore + completionScore + depthScore);
+    const recencyScore = Math.max(0, 50 - daysAgo * 3);      // 50pts max, -3/day
+    const volumeScore = Math.min(25, vm.views * 3);           // 25pts max
+    const depthScore = Math.min(25,
+      (vm.documents.size * 5) + (vm.datarooms.size * 8) + (vm.links.size * 2)
+    );                                                          // 25pts max
+    const score = Math.round(recencyScore + volumeScore + depthScore);
     return {
       email: vm.email, name: vm.name, score,
       classification: score >= 70 ? "HOT" : score >= 40 ? "WARM" : "COLD",
       views: vm.views,
-      totalDurationMinutes: Math.round(vm.totalDuration / 60000),
-      avgCompletionPct: Math.round(avgCompletion),
       lastSeen: vm.lastSeen,
       daysAgo: Math.round(daysAgo),
       documentsViewed: vm.documents.size,
+      dataroomsVisited: vm.datarooms.size,
       linksVisited: vm.links.size,
     };
   }).sort((a: any, b: any) => b.score - a.score);
@@ -115,16 +113,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const docPerf = documents.map(doc => {
     const docViews = views.filter(v => v.documentId === doc.id);
-    const avgDuration = docViews.length > 0
-      ? docViews.reduce((s, v) => s + (v.totalDuration ?? 0), 0) / docViews.length / 60000 : 0;
-    const avgCompletion = docViews.length > 0
-      ? docViews.reduce((s, v) => s + (v.completionRate ?? 0), 0) / docViews.length : 0;
     return {
       id: doc.id, name: doc.name,
       totalViews: docViews.length,
       uniqueViewers: new Set(docViews.map(v => v.viewerEmail)).size,
-      avgDurationMinutes: Math.round(avgDuration * 10) / 10,
-      avgCompletionPct: Math.round(avgCompletion),
     };
   }).sort((a, b) => b.totalViews - a.totalViews);
 
@@ -162,10 +154,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       viewerName: v.viewerName,
       document: v.document?.name,
       link: v.link?.name ?? v.link?.slug,
-      durationMinutes: Math.round((v.totalDuration ?? 0) / 60000 * 10) / 10,
-      completionPct: Math.round(v.completionRate ?? 0),
+      viewType: v.viewType,
+      verified: v.verified,
     })),
-    documents,
+    documents: documents.slice(0, 20),
     datarooms,
     generatedAt: new Date().toISOString(),
   });
