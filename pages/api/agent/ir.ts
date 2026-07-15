@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   await prisma.restrictedToken.update({
     where: { id: tokenRecord.id },
-    data: { lastUsedAt: new Date() },
+    data: { lastUsed: new Date() },
   });
 
   const teamId = tokenRecord.teamId;
