@@ -1,2 +1,4 @@
-export const sendScheduledEmail = async () => {}
-export default {}
+export const sendDataroomTrialInfoEmailTask = async () => {};
+export const sendDataroomTrial24hReminderEmailTask = async () => {};
+export const sendDataroomTrialExpiredEmailTask = async () => {};
+export default {};

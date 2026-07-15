@@ -1,2 +1,2 @@
-export const sendScheduledEmail = async () => {}
-export default {}
+export const sendUpgradeOneMonthCheckinEmailTask = async () => {};
+export default {};

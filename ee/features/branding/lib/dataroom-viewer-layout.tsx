@@ -1,2 +1,10 @@
-export const DataroomViewerLayout = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+import { z } from "zod";
+export const DataroomCardLayoutSchema = z.string().optional();
+export const DataroomViewerLayoutPresetSchema = z.string().optional();
+export const DataroomViewerHeaderStyleSchema = z.string().optional();
+export const CARD_LAYOUT_OPTIONS = [];
+export const inferDataroomViewerLayoutPreset = () => null;
+export const asDataroomCardLayout = (v: unknown) => v;
+export const asDataroomViewerHeaderStyle = (v: unknown) => v;
+export const DataroomViewerLayout = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
 export default DataroomViewerLayout;
