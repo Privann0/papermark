@@ -1,0 +1,2 @@
+export const DATAROOM_PREVIEW_PRESETS = [];
+export default DATAROOM_PREVIEW_PRESETS;
