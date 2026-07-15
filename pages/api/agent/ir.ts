@@ -27,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const [documents, links, datarooms] = await Promise.all([
     prisma.document.findMany({
-      where: { link: { teamId } },
+      where: { teamId },
       orderBy: { createdAt: "desc" },
       take: 50,
       select: {
@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     }),
     prisma.link.findMany({
-      where: { link: { teamId } },
+      where: { teamId },
       orderBy: { createdAt: "desc" },
       take: 100,
       select: {
@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     }),
     prisma.dataroom.findMany({
-      where: { link: { teamId } },
+      where: { teamId },
       orderBy: { createdAt: "desc" },
       take: 20,
       select: {
