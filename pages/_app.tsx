@@ -28,46 +28,46 @@ export default function App({
   return (
     <>
       <Head>
-        <title>Papermark | The Open Source DocSend Alternative</title>
+        <title>JETT Technologies · NTX Platform · Confidential</title>
         <meta name="theme-color" content="#000000" />
         <meta
           name="description"
-          content="Papermark is an open-source document sharing alternative to DocSend with built-in analytics."
+          content="First patented narrow tilting EV with active MPC tilt control. Under one metre wide. Fully enclosed."
           key="description"
         />
         <meta
           property="og:title"
-          content="Papermark | The Open Source DocSend Alternative"
+          content="JETT Technologies · NTX Platform · Confidential"
           key="og-title"
         />
         <meta
           property="og:description"
-          content="Papermark is an open-source document sharing alternative to DocSend with built-in analytics."
+          content="First patented narrow tilting EV with active MPC tilt control. Under one metre wide. Fully enclosed."
           key="og-description"
         />
         <meta
           property="og:image"
-          content="https://www.papermark.com/_static/meta-image.png"
+          content="https://wedipvzfackkwm2n.public.blob.vercel-storage.com/logo-5AsarzxdeGSBREAj498OtKrck6r5Si.png"
           key="og-image"
         />
         <meta
           property="og:url"
-          content="https://www.papermark.com"
+          content="https://room.jett.city"
           key="og-url"
         />
         <meta property="og:type" content="website" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:site" content="@papermarkio" />
         <meta name="twitter:creator" content="@papermarkio" />
-        <meta name="twitter:title" content="Papermark" key="tw-title" />
+        <meta name="twitter:title" content="JETT Technologies" key="tw-title" />
         <meta
           name="twitter:description"
-          content="Papermark is an open-source document sharing alternative to DocSend with built-in analytics."
+          content="First patented narrow tilting EV with active MPC tilt control. Under one metre wide. Fully enclosed."
           key="tw-description"
         />
         <meta
           name="twitter:image"
-          content="https://www.papermark.com/_static/meta-image.png"
+          content="https://wedipvzfackkwm2n.public.blob.vercel-storage.com/logo-5AsarzxdeGSBREAj498OtKrck6r5Si.png"
           key="tw-image"
         />
         <link rel="icon" href="/favicon.ico" key="favicon" />
