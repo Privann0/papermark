@@ -302,7 +302,7 @@ export async function getStaticProps(context: GetStaticPropsContext) {
           metaDescription: publicMeta.metaDescription,
           metaImage: publicMeta.metaImage,
           metaFavicon: publicMeta.metaFavicon,
-          metaUrl: `https://www.papermark.com/view/${linkId}`,
+          metaUrl: `https://room.jett.city/view/${linkId}`,
         },
         showPoweredByBanner: false,
         showAccountCreationSlide: false,
