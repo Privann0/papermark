@@ -109,12 +109,13 @@ class RedisLock implements Lock {
 
   async unlock(): Promise<void> {
     const lockKey = `tus-lock-${this.id}`;
-    const lockExists = await this.locker.redisClient.del(lockKey);
-    if (!lockExists) {
-      throw new Error("Releasing an unlocked lock!");
-    }
 
-    // Clean up the request release entry
+    // The Redis lock may already have expired before TUS reaches unlock().
+    // Releasing an expired lock must be idempotent and must not turn an
+    // otherwise successful upload into a 500 response.
+    await this.locker.redisClient.del(lockKey);
+
+    // Clean up the request release entry.
     await this.locker.redisClient.del(`requestRelease:${lockKey}`);
   }
 

@@ -31,6 +31,7 @@ export const config = {
 
 const locker = new RedisLocker({
   redisClient: lockerRedisClient,
+  acquireLockTimeout: 1000 * 90,
 });
 
 const FREE_PLAN = "free";

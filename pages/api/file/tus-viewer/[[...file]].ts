@@ -23,6 +23,7 @@ export const config = {
 
 const locker = new RedisLocker({
   redisClient: lockerRedisClient,
+  acquireLockTimeout: 1000 * 90,
 });
 
 const tusServer = new Server({
