@@ -35,6 +35,8 @@ export function useDocumentProgressStatus(
     {
       enabled: !!publicAccessToken,
       accessToken: publicAccessToken,
+      baseURL:
+        process.env.NEXT_PUBLIC_TRIGGER_API_URL ?? "https://api.trigger.dev",
     },
   );
 

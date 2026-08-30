@@ -44,6 +44,8 @@ export function useFreezeProgress({
   const { runs } = useRealtimeRunsWithTag(tag, {
     enabled: isArchiveInProgress && !!accessToken,
     accessToken,
+    baseURL:
+      process.env.NEXT_PUBLIC_TRIGGER_API_URL ?? "https://api.trigger.dev",
   });
 
   const activeRun = runs.find((r) =>
