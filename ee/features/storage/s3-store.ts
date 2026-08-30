@@ -29,6 +29,8 @@ export class MultiRegionS3Store extends S3Store {
     const superS3Config: any = {
       bucket: euConfig.bucket,
       region: euConfig.region,
+      endpoint: euConfig.endpoint || undefined,
+      forcePathStyle: Boolean(euConfig.endpoint),
       credentials: {
         accessKeyId: euConfig.accessKeyId,
         secretAccessKey: euConfig.secretAccessKey,
@@ -47,6 +49,8 @@ export class MultiRegionS3Store extends S3Store {
     const euS3Config: any = {
       bucket: euConfig.bucket,
       region: euConfig.region,
+      endpoint: euConfig.endpoint || undefined,
+      forcePathStyle: Boolean(euConfig.endpoint),
       credentials: {
         accessKeyId: euConfig.accessKeyId,
         secretAccessKey: euConfig.secretAccessKey,
@@ -63,6 +67,8 @@ export class MultiRegionS3Store extends S3Store {
       const usS3Config: any = {
         bucket: this.usConfig.bucket,
         region: this.usConfig.region,
+        endpoint: this.usConfig.endpoint || undefined,
+        forcePathStyle: Boolean(this.usConfig.endpoint),
         credentials: {
           accessKeyId: this.usConfig.accessKeyId,
           secretAccessKey: this.usConfig.secretAccessKey,
