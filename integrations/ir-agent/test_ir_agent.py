@@ -7,6 +7,7 @@ import io
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 import threading
 import unittest
@@ -82,7 +83,14 @@ class FakeServers:
                 fake.queries.append(q)
                 cursor = q.get("cursor", [None])[0]
                 since = q.get("since", [None])[0]
-                limit = int(q.get("limit", ["100"])[0])
+                limit = min(int(q.get("limit", ["100"])[0]), 500)
+                try:
+                    if since:
+                        ir_agent.parse_ts(since)
+                    if cursor:
+                        ir_agent.parse_ts(cursor.split("|")[0])
+                except ValueError:
+                    return self._send(400, {"error": "bad request"})
                 rows = sorted(fake.views, key=key_of)
                 if since:
                     rows = [v for v in rows if ir_agent.parse_ts(v["viewedAt"]) >= ir_agent.parse_ts(since)]
@@ -92,9 +100,12 @@ class FakeServers:
                 page, has_more = rows[:limit], len(rows) > limit
                 last = page[-1] if page else None
                 next_cursor = f"{last['viewedAt']}|{last['viewId']}" if last else cursor
-                self._send(200, {"views": page, "nextCursor": next_cursor, "hasMore": has_more})
+                self._send(200, {"views": page, "nextCursor": next_cursor, "hasMore": has_more,
+                                 "settledBefore": "2099-01-01T00:00:00.000Z"})
 
             def do_POST(self):
+                if self.path.startswith("/api/agent/ir/views"):
+                    return self._send(405, {"error": "Method Not Allowed"})
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if self.path != f"/api/companies/{COMPANY}/issues":
                     return self._send(404, {})
@@ -119,6 +130,7 @@ class FakeServers:
 
     def close(self):
         self.httpd.shutdown()
+        self.httpd.server_close()
 
 
 class IrAgentTest(unittest.TestCase):
@@ -436,6 +448,29 @@ class IrAgentTest(unittest.TestCase):
         with ir_agent.run_lock(self.state):
             code, out = self.run_agent("--dry-run")
         self.assertEqual(code, ir_agent.EXIT_LOCKED)
+
+    def test_check_endpoint_script(self):
+        import check_endpoint
+
+        self.srv.views = [make_view(i, email="a@fund.com" if i % 2 else None) for i in range(7)]
+        argv = ["check_endpoint.py", "--url", self.srv.url, "--since", "2026-09-01T00:00:00Z"]
+        env = {"IR_PAPERMARK_TOKEN_FILE": self.env["IR_PAPERMARK_TOKEN_FILE"]}
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch.dict(os.environ, env), \
+                contextlib.redirect_stdout(out):
+            code = check_endpoint.main()
+        text = out.getvalue()
+        self.assertEqual(code, 0, text)
+        self.assertIn("OK: 15/15", text)
+        self.assertNotIn(TOKEN, text)
+        self.assertNotIn("a@fund.com", text)
+        # a server that is down is reported, not a crash
+        self.srv.close()
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch.dict(os.environ, env), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(check_endpoint.main(), 1)
+        self.srv = FakeServers()  # for tearDown
 
     def test_state_file_is_private(self):
         self.srv.views = [make_view(0)]
