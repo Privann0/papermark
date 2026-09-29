@@ -37,11 +37,16 @@ def make_view(i, email=None, archived=False, doc="Deck", room=None):
     }
 
 
+def key_of(v):
+    return (ir_agent.parse_ts(v["viewedAt"]), v["viewId"])
+
+
 class FakeServers:
     """Papermark /api/agent/ir/views + Paperclip /api/companies/:id/issues."""
 
     def __init__(self):
         self.views: list[dict] = []
+        self.queries: list[dict] = []
         self.papermark_fail_on_call: set[int] = set()
         self.papermark_calls = 0
         self.issues_by_key: dict[str, dict] = {}
@@ -71,13 +76,23 @@ class FakeServers:
                 fake.papermark_calls += 1
                 if fake.papermark_calls in fake.papermark_fail_on_call:
                     return self._send(500, {"error": "boom"})
+                # Same semantics as pages/api/agent/ir/views.ts: keyset on
+                # (viewedAt, id) ascending, optional inclusive `since`.
                 q = urllib.parse.parse_qs(u.query)
-                start = int(q.get("cursor", ["0"])[0])
+                fake.queries.append(q)
+                cursor = q.get("cursor", [None])[0]
+                since = q.get("since", [None])[0]
                 limit = int(q.get("limit", ["100"])[0])
-                page = fake.views[start : start + limit]
-                end = start + len(page)
-                self._send(200, {"views": page, "nextCursor": str(end) if (page or start) else None,
-                                 "hasMore": end < len(fake.views)})
+                rows = sorted(fake.views, key=key_of)
+                if since:
+                    rows = [v for v in rows if ir_agent.parse_ts(v["viewedAt"]) >= ir_agent.parse_ts(since)]
+                if cursor:
+                    at, vid = cursor.split("|")
+                    rows = [v for v in rows if key_of(v) > (ir_agent.parse_ts(at), vid)]
+                page, has_more = rows[:limit], len(rows) > limit
+                last = page[-1] if page else None
+                next_cursor = f"{last['viewedAt']}|{last['viewId']}" if last else cursor
+                self._send(200, {"views": page, "nextCursor": next_cursor, "hasMore": has_more})
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -120,6 +135,7 @@ class IrAgentTest(unittest.TestCase):
             "IR_PAPERMARK_TOKEN_FILE": str(tok),
             "IR_STATE_DIR": str(self.state),
             "IR_CMO_AGENT_ID": CMO,
+            "IR_SYNC_START": "2026-09-01T00:00:00Z",
             "IR_EXCLUDE_EMAIL_DOMAINS": "jett.city",
             "PAPERCLIP_API_URL": self.srv.url,
             "PAPERCLIP_API_KEY": PC_KEY,
@@ -177,13 +193,120 @@ class IrAgentTest(unittest.TestCase):
         self.assertEqual(self.srv.issue_posts, [])
         with self.db() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM views").fetchone()[0], 200)
-            self.assertEqual(db.execute("SELECT value FROM meta WHERE key='cursor'").fetchone()[0], "200")
+            v199 = sorted(self.srv.views, key=key_of)[199]
+            self.assertEqual(db.execute("SELECT value FROM meta WHERE key='cursor'").fetchone()[0],
+                             f"{v199['viewedAt']}|{v199['viewId']}")
         code, out = self.run_agent()
         self.assertEqual(code, 0, out)
         with self.db() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM views").fetchone()[0], 450)
         self.assertEqual(len(self.srv.issues_by_key), 1)
         self.assertEqual(json.loads(out)["sent"][0]["views"], 450)
+
+    # ── late inserts & overlap window ───────────────────────────────────────
+
+    def test_late_insert_behind_cursor_is_caught_by_overlap(self):
+        self.srv.views = [make_view(i, email="a@fund.com") for i in range(10)]  # 10:00:00..09
+        code, out = self.run_agent()
+        self.assertEqual(code, 0, out)
+        # A view stamped 10:00:03 whose transaction committed only now: the
+        # cursor (10:00:09) is already past it, so the keyset scan can't see it.
+        late = make_view(3, email="late@fund.com")
+        late["viewId"] = "v0003-late"
+        self.srv.views.append(late)
+        code, out = self.run_agent()
+        self.assertEqual(code, 0, out)
+        res = json.loads(out)
+        self.assertEqual((res["inserted"], res["late_inserted"]), (0, 1))
+        self.assertEqual(res["sent"][0]["views"], 1)
+        self.assertEqual(len(self.srv.issues_by_key), 2)
+        self.assertIn("late@fund.com", self.srv.issue_posts[-1]["description"])
+        # overlap re-reads never move the cursor and never re-report
+        code, out = self.run_agent()
+        res = json.loads(out)
+        self.assertEqual((res["late_inserted"], res["sent"]), (0, []))
+        with self.db() as db:
+            cur = db.execute("SELECT value FROM meta WHERE key='cursor'").fetchone()[0]
+        self.assertEqual(cur, "2026-09-01T10:00:09.000Z|v0009")
+
+    def test_late_insert_older_than_overlap_is_not_caught(self):
+        """Documented limit: the overlap bounds how late a commit may be."""
+        self.srv.views = [make_view(0), make_view(500)]  # 2026-09-01 and 2026-09-06
+        self.run_agent(env={**self.env, "IR_OVERLAP_HOURS": "24"})
+        late = make_view(1)  # 2026-09-01, 5 days behind the cursor
+        late["viewId"] = "v0001-late"
+        self.srv.views.append(late)
+        code, out = self.run_agent(env={**self.env, "IR_OVERLAP_HOURS": "24"})
+        self.assertEqual(json.loads(out)["late_inserted"], 0)
+
+    def test_overlap_scan_is_bounded_by_sync_start(self):
+        self.srv.views = [make_view(0)]
+        self.run_agent(env={**self.env, "IR_OVERLAP_HOURS": "720"})
+        since = [q["since"][0] for q in self.srv.queries if "since" in q]
+        self.assertTrue(since)
+        self.assertTrue(all(s >= "2026-09-01T00:00:00.000Z" for s in since))
+
+    # ── operational start & historical report ───────────────────────────────
+
+    def test_sync_start_excludes_history_from_tickets(self):
+        old = [make_view(i, email=f"old{i}@fund.com") for i in range(3)]
+        for v in old:
+            v["viewedAt"] = v["viewedAt"].replace("2026-09-01", "2026-08-15")
+        self.srv.views = old + [make_view(10, email="new@fund.com")]
+        env = {**self.env, "IR_SYNC_START": "2026-09-01T00:00:00+02:00"}
+        code, out = self.run_agent(env=env)
+        self.assertEqual(code, 0, out)
+        res = json.loads(out)
+        self.assertEqual(res["sync_start"], "2026-08-31T22:00:00.000Z")
+        self.assertEqual(res["sent"][0]["views"], 1)
+        self.assertEqual(self.srv.queries[0]["since"], ["2026-08-31T22:00:00.000Z"])
+        self.assertNotIn("old0@fund.com", self.srv.issue_posts[0]["description"])
+
+    def test_first_run_requires_sync_start_and_it_cannot_drift(self):
+        env = {k: v for k, v in self.env.items() if k != "IR_SYNC_START"}
+        self.srv.views = [make_view(0)]
+        for args in ((), ("--dry-run",)):
+            code, out = self.run_agent(*args, env=env)
+            self.assertEqual(code, ir_agent.EXIT_CONFIG, out)
+            self.assertIn("IR_SYNC_START", out)
+        self.assertEqual(self.srv.queries, [])
+        self.assertEqual(self.run_agent()[0], 0)
+        # once recorded, the env var may be dropped but not changed
+        self.assertEqual(self.run_agent(env=env)[0], 0)
+        code, out = self.run_agent(env={**self.env, "IR_SYNC_START": "2026-01-01T00:00:00Z"})
+        self.assertEqual(code, ir_agent.EXIT_CONFIG)
+        self.assertIn("differs", out)
+
+    def test_naive_sync_start_is_rejected(self):
+        code, out = self.run_agent("--dry-run", env={**self.env, "IR_SYNC_START": "2026-09-29"})
+        self.assertEqual(code, ir_agent.EXIT_CONFIG)
+
+    def test_historical_report_is_separate_and_creates_no_ticket(self):
+        old = [make_view(i, email="lp@fund.com") for i in range(4)]
+        for v in old:
+            v["viewedAt"] = v["viewedAt"].replace("2026-09-01", "2026-08-15")
+        self.srv.views = old + [make_view(10, email="new@fund.com")]
+        report = Path(self.tmp.name) / "historique.md"
+        env = {k: v for k, v in self.env.items() if not k.startswith("PAPERCLIP_")}
+        code, out = self.run_agent("--historical-report", str(report), env=env)
+        self.assertEqual(code, 0, out)
+        res = json.loads(out)
+        self.assertEqual(res["stats"]["views"], 4)
+        self.assertNotIn("lp@fund.com", out)
+        text = report.read_text()
+        self.assertIn("Rapport historique", text)
+        self.assertIn("lp@fund.com", text)
+        self.assertNotIn("new@fund.com", text)
+        self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.srv.issue_posts, [])
+        self.assertFalse((self.state / "state.db").exists())
+        # never overwrites an existing report
+        code, out = self.run_agent("--historical-report", str(report), env=env)
+        self.assertEqual(code, ir_agent.EXIT_CONFIG)
+        # and the operational sync afterwards still ignores that history
+        self.run_agent()
+        self.assertEqual(len(self.srv.issue_posts), 1)
+        self.assertNotIn("lp@fund.com", self.srv.issue_posts[0]["description"])
 
     # ── handoff ─────────────────────────────────────────────────────────────
 

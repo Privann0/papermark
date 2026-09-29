@@ -44,9 +44,27 @@ export function decodeCursor(raw: unknown): IrCursor | null {
 }
 
 export function parseLimit(raw: unknown): number {
-  const n = typeof raw === "string" ? Number.parseInt(raw, 10) : NaN;
+  const n =
+    typeof raw === "string" && /^\d{1,6}$/.test(raw) ? Number(raw) : NaN;
   if (!Number.isFinite(n) || n <= 0) return IR_VIEWS_DEFAULT_LIMIT;
   return Math.min(n, IR_VIEWS_MAX_LIMIT);
+}
+
+// Optional lower bound (inclusive) used when no cursor is given: first sync
+// from an operational start date, or re-scanning an overlap window.
+// Requires an explicit timezone so "2026-09-29" can't silently mean UTC.
+export function parseSince(raw: unknown): Date | null | "invalid" {
+  if (raw === undefined) return null;
+  if (
+    typeof raw !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(
+      raw,
+    )
+  ) {
+    return "invalid";
+  }
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? "invalid" : d;
 }
 
 // Keyset condition: strictly after (viewedAt, id), ordered ascending.
@@ -57,6 +75,22 @@ export function afterCursorWhere(cursor: IrCursor | null) {
       { viewedAt: { gt: cursor.viewedAt } },
       { viewedAt: cursor.viewedAt, id: { gt: cursor.id } },
     ],
+  };
+}
+
+export function buildViewsWhere(input: {
+  teamId: string;
+  cursor: IrCursor | null;
+  since: Date | null;
+  settledBefore: Date;
+}) {
+  return {
+    link: { teamId: input.teamId },
+    viewedAt: {
+      lte: input.settledBefore,
+      ...(input.since ? { gte: input.since } : {}),
+    },
+    ...afterCursorWhere(input.cursor),
   };
 }
 

@@ -35,8 +35,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPORT_MARKER = "jett-ir-report"
@@ -64,10 +64,24 @@ class PaperclipError(Exception):
 # ── config ────────────────────────────────────────────────────────────────────
 
 
+def parse_ts(value: str) -> datetime:
+    """ISO 8601 with an explicit timezone (naive values are rejected)."""
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        raise ValueError("timezone required")
+    return dt.astimezone(timezone.utc)
+
+
+def iso_z(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 @dataclass
 class Config:
     papermark_url: str
     papermark_token: str = field(repr=False)
+    sync_start: datetime | None
+    overlap: timedelta
     state_dir: Path
     cmo_agent_id: str
     handoff_status: str
@@ -106,9 +120,25 @@ def load_config(env: dict[str, str], need_paperclip: bool) -> Config:
     handoff_status = env.get("IR_HANDOFF_STATUS", "backlog")
     if handoff_status not in ("backlog", "todo"):
         raise ConfigError("IR_HANDOFF_STATUS must be backlog or todo")
+    sync_start = None
+    if env.get("IR_SYNC_START"):
+        try:
+            sync_start = parse_ts(env["IR_SYNC_START"])
+        except ValueError:
+            raise ConfigError(
+                "IR_SYNC_START must be ISO 8601 with timezone, e.g. 2026-09-29T00:00:00+02:00"
+            ) from None
+    try:
+        overlap_hours = float(env.get("IR_OVERLAP_HOURS", "24"))
+    except ValueError:
+        raise ConfigError("IR_OVERLAP_HOURS must be a number") from None
+    if not 0 <= overlap_hours <= 24 * 30:
+        raise ConfigError("IR_OVERLAP_HOURS must be between 0 and 720")
     cfg = Config(
         papermark_url=papermark_url,
         papermark_token=_read_secret(env, "IR_PAPERMARK_TOKEN"),
+        sync_start=sync_start,
+        overlap=timedelta(hours=overlap_hours),
         state_dir=Path(
             env.get("IR_STATE_DIR", "~/.local/state/jett-ir-agent")
         ).expanduser(),
@@ -255,11 +285,17 @@ def skip_reason_for(view: dict, exclude_domains: tuple[str, ...]) -> str | None:
     return None
 
 
+def before_start(view: dict, cfg: Config) -> bool:
+    return cfg.sync_start is not None and parse_ts(view["viewedAt"]) < cfg.sync_start
+
+
 def store_page(db, views: list[dict], next_cursor: str | None, cfg: Config) -> int:
     inserted = 0
     collected = now_iso()
     with tx(db):
         for v in views:
+            if before_start(v, cfg):
+                continue
             viewer = v.get("viewer") or {}
             kind = viewer.get("kind")
             if kind not in ("anonymous", "declared_email"):
@@ -289,10 +325,12 @@ def store_page(db, views: list[dict], next_cursor: str | None, cfg: Config) -> i
     return inserted
 
 
-def fetch_page(cfg: Config, cursor: str | None) -> dict:
+def fetch_page(cfg: Config, cursor: str | None, since: datetime | None = None) -> dict:
     q = {"limit": str(PAGE_LIMIT)}
     if cursor:
         q["cursor"] = cursor
+    if since:
+        q["since"] = iso_z(since)
     url = f"{cfg.papermark_url}/api/agent/ir/views?{urllib.parse.urlencode(q)}"
     data = http_json(
         "GET", url, {"Authorization": f"Bearer {cfg.papermark_token}"}, err=PapermarkError
@@ -302,30 +340,60 @@ def fetch_page(cfg: Config, cursor: str | None) -> dict:
     return data
 
 
-def collect(db, cfg: Config, *, persist: bool) -> dict:
-    """Pull every settled view after the stored cursor. Returns stats and, when
-    persist=False, the fetched views (for dry-runs)."""
-    cursor = get_meta(db, "cursor")
-    pages = fetched = inserted = 0
-    buffered: list[dict] = []
+def iter_pages(cfg: Config, cursor: str | None, since: datetime | None):
+    """Yield pages until exhausted or the per-run page budget is spent."""
+    pages = 0
     has_more = True
     while has_more and pages < MAX_PAGES_PER_RUN:
-        page = fetch_page(cfg, cursor)
+        page = fetch_page(cfg, cursor, since)
         pages += 1
-        fetched += len(page["views"])
-        if persist:
-            inserted += store_page(db, page["views"], page.get("nextCursor"), cfg)
-        else:
-            buffered.extend(page["views"])
+        yield page
         cursor = page.get("nextCursor") or cursor
         has_more = bool(page.get("hasMore"))
-    return {
-        "pages": pages,
-        "fetched": fetched,
-        "inserted": inserted,
-        "complete": not has_more,
-        "buffered": buffered,
-    }
+
+
+def collect(db, cfg: Config, *, persist: bool, stored_max: str | None = None) -> dict:
+    """1) Main scan: every settled view after the stored cursor (or from
+    sync_start on the first run); page rows and cursor are committed together.
+    2) Overlap scan: re-read [latest collected view - overlap, now] without
+    moving the cursor, to catch views whose insert committed after the cursor
+    had already passed their viewedAt. INSERT OR IGNORE makes it idempotent.
+    With persist=False nothing is written and fetched views are returned."""
+    cursor = get_meta(db, "cursor")
+    stats = {"pages": 0, "fetched": 0, "inserted": 0, "overlap_pages": 0, "late_inserted": 0,
+             "complete": False}
+    buffered: list[dict] = []
+
+    last_page = None
+    for page in iter_pages(cfg, cursor, None if cursor else cfg.sync_start):
+        last_page = page
+        stats["pages"] += 1
+        stats["fetched"] += len(page["views"])
+        if persist:
+            stats["inserted"] += store_page(db, page["views"], page.get("nextCursor"), cfg)
+        else:
+            buffered.extend(page["views"])
+    stats["complete"] = last_page is not None and not last_page.get("hasMore")
+
+    if persist:
+        stored_max = db.execute("SELECT max(viewed_at) AS m FROM views").fetchone()["m"]
+    candidates = [stored_max] if stored_max else []
+    candidates += [v["viewedAt"] for v in buffered]
+    if stats["complete"] and cfg.overlap and candidates:
+        anchor = max(parse_ts(c) for c in candidates)
+        since = anchor - cfg.overlap
+        if cfg.sync_start and since < cfg.sync_start:
+            since = cfg.sync_start
+        stats["overlap_since"] = iso_z(since)
+        for page in iter_pages(cfg, None, since):
+            stats["overlap_pages"] += 1
+            if persist:
+                stats["late_inserted"] += store_page(db, page["views"], None, cfg)
+            else:
+                buffered.extend(page["views"])
+
+    stats["buffered"] = list({v["viewId"]: v for v in buffered}.values())
+    return stats
 
 
 # ── report (facts only, no interpretation) ────────────────────────────────────
@@ -334,6 +402,8 @@ def collect(db, cfg: Config, *, persist: bool) -> dict:
 def _rows_from_api(views: list[dict], cfg: Config) -> list[dict]:
     rows = []
     for v in views:
+        if before_start(v, cfg):
+            continue
         viewer = v.get("viewer") or {}
         doc, room, link = v.get("document") or {}, v.get("dataroom") or {}, v.get("link") or {}
         rows.append(
@@ -363,7 +433,7 @@ def _md(s: str) -> str:
     return str(s).replace("|", "\\|").replace("\n", " ")
 
 
-def build_report(rows: list, batch_key: str) -> dict:
+def build_report(rows: list, batch_key: str, *, historical: bool = False) -> dict:
     rows = sorted(rows, key=lambda r: (r["viewed_at"], r["view_id"]))
     identified = [r for r in rows if r["viewer_kind"] == "declared_email"]
     anonymous = [r for r in rows if r["viewer_kind"] == "anonymous"]
@@ -388,9 +458,14 @@ def build_report(rows: list, batch_key: str) -> dict:
         else:
             a["anonymous"] += 1
 
+    heading = (
+        "## Rapport historique d'activité Papermark (hors synchronisation, aucun ticket)"
+        if historical
+        else "## Rapport factuel d'activité Papermark (IR Agent)"
+    )
     lines = [
         f"<!-- {REPORT_MARKER}:{batch_key} -->",
-        "## Rapport factuel d'activité Papermark (IR Agent)",
+        heading,
         "",
         f"- Période observée : {first} → {last} (UTC)",
         f"- Vues : **{len(rows)}** — avec email déclaré : {len(identified)}, "
@@ -520,22 +595,42 @@ def mask_email(email: str) -> str:
     return f"{local[:1]}***@{domain}"
 
 
+def resolve_sync_start(cfg: Config, stored: str | None) -> datetime:
+    """The operational start is fixed by the first live run and can't drift:
+    nothing before it is ever turned into a ticket."""
+    if stored:
+        stored_dt = parse_ts(stored)
+        if cfg.sync_start and cfg.sync_start != stored_dt:
+            raise ConfigError(
+                f"IR_SYNC_START differs from the start recorded in state ({iso_z(stored_dt)})"
+            )
+        return stored_dt
+    if not cfg.sync_start:
+        raise ConfigError("IR_SYNC_START is required until the first live run records it")
+    return cfg.sync_start
+
+
 def run_dry(cfg: Config, db_path: Path, show_report: bool) -> dict:
     """Read-only: fetches from Papermark from the persisted cursor (if any),
     writes nothing, calls nothing on Paperclip."""
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    stored_start = stored_max = None
+    seen: set[str] = set()
     if db_path.exists():
         src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        cur = src.execute("SELECT value FROM meta WHERE key='cursor'").fetchone()
+        meta = dict(src.execute("SELECT key, value FROM meta").fetchall())
         seen = {r[0] for r in src.execute("SELECT view_id FROM views")}
+        stored_max = src.execute("SELECT max(viewed_at) FROM views").fetchone()[0]
         src.close()
-        if cur:
-            db.execute("INSERT INTO meta VALUES('cursor',?)", (cur[0],))
-    else:
-        seen = set()
-    result = collect(db, cfg, persist=False)
+        stored_start = meta.get("sync_start")
+        if meta.get("cursor"):
+            db.execute("INSERT INTO meta VALUES('cursor',?)", (meta["cursor"],))
+    start = resolve_sync_start(cfg, stored_start)
+    cfg = replace(cfg, sync_start=start)
+    result = collect(db, cfg, persist=False, stored_max=stored_max)
+    result["sync_start"] = iso_z(start)
     rows = [r for r in _rows_from_api(result.pop("buffered"), cfg) if r["view_id"] not in seen]
     reportable = [r for r in rows if not r["skip_reason"]]
     out = {"mode": "dry-run", **result, "new_views": len(rows),
@@ -558,10 +653,49 @@ def run_dry(cfg: Config, db_path: Path, show_report: bool) -> dict:
     return out
 
 
+def run_historical(cfg: Config, output: Path, until: datetime | None) -> dict:
+    """Separate, read-only report of views before `until` (default: the
+    operational start). Writes a 0600 Markdown file; creates no ticket and
+    touches no state."""
+    until = until or cfg.sync_start
+    if until is None:
+        raise ConfigError("--until or IR_SYNC_START is required for --historical-report")
+    views: list[dict] = []
+    pages = 0
+    reached_until = False
+    for page in iter_pages(replace(cfg, sync_start=None), None, None):
+        pages += 1
+        for v in page["views"]:
+            if parse_ts(v["viewedAt"]) >= until:
+                reached_until = True
+                break
+            views.append(v)
+        if reached_until:
+            break
+    rows = _rows_from_api(views, replace(cfg, sync_start=None))
+    reportable = [r for r in rows if not r["skip_reason"]]
+    out = {"mode": "historical-report", "until": iso_z(until), "pages": pages,
+           "complete": reached_until or pages < MAX_PAGES_PER_RUN,
+           "views_before_until": len(rows), "reportable": len(reportable)}
+    if not reportable:
+        return out
+    report = build_report(reportable, batch_key_for([r["view_id"] for r in reportable]),
+                          historical=True)
+    fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(report["description"] + "\n")
+    out.update(output=str(output), stats=report["stats"])
+    return out
+
+
 def run_live(cfg: Config, db_path: Path) -> dict:
     db = open_state(db_path)
+    start = resolve_sync_start(cfg, get_meta(db, "sync_start"))
+    db.execute("INSERT OR IGNORE INTO meta(key,value) VALUES('sync_start',?)", (iso_z(start),))
+    cfg = replace(cfg, sync_start=start)
     collected = collect(db, cfg, persist=True)
     collected.pop("buffered")
+    collected["sync_start"] = iso_z(start)
     sent, errors = [], []
     pending = [r["batch_key"] for r in db.execute(
         "SELECT batch_key FROM batches WHERE status='pending' ORDER BY created_at")]
@@ -586,17 +720,35 @@ def main(argv=None, env=None) -> int:
                     help="fetch and build the report; write nothing, call no Paperclip API")
     ap.add_argument("--show-report", action="store_true",
                     help="with --dry-run: include the report with masked emails")
+    ap.add_argument("--historical-report", metavar="OUTPUT.md", type=Path,
+                    help="write a report of views before --until (default IR_SYNC_START) "
+                         "to a new 0600 file; no ticket, no state")
+    ap.add_argument("--until", help="ISO 8601 with timezone, for --historical-report")
     args = ap.parse_args(argv)
     env = dict(os.environ if env is None else env)
+    read_only = args.dry_run or args.historical_report is not None
     try:
-        cfg = load_config(env, need_paperclip=not args.dry_run)
+        cfg = load_config(env, need_paperclip=not read_only)
+        until = parse_ts(args.until) if args.until else None
     except ConfigError as e:
         print(json.dumps({"ok": False, "error": f"config: {e}"}))
         return EXIT_CONFIG
+    except ValueError:
+        print(json.dumps({"ok": False, "error": "config: --until must be ISO 8601 with timezone"}))
+        return EXIT_CONFIG
     db_path = cfg.state_dir / "state.db"
     try:
-        with run_lock(cfg.state_dir):
-            out = run_dry(cfg, db_path, args.show_report) if args.dry_run else run_live(cfg, db_path)
+        if args.historical_report is not None:
+            out = run_historical(cfg, args.historical_report, until)
+        else:
+            with run_lock(cfg.state_dir):
+                out = run_dry(cfg, db_path, args.show_report) if args.dry_run else run_live(cfg, db_path)
+    except ConfigError as e:
+        print(json.dumps({"ok": False, "error": f"config: {e}"}))
+        return EXIT_CONFIG
+    except FileExistsError:
+        print(json.dumps({"ok": False, "error": "output file already exists"}))
+        return EXIT_CONFIG
     except RuntimeError as e:
         print(json.dumps({"ok": False, "error": str(e)}))
         return EXIT_LOCKED

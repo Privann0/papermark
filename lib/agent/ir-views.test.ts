@@ -6,9 +6,11 @@ import {
   IR_VIEWS_DEFAULT_LIMIT,
   IR_VIEWS_MAX_LIMIT,
   afterCursorWhere,
+  buildViewsWhere,
   decodeCursor,
   encodeCursor,
   parseLimit,
+  parseSince,
   serializeView,
   tokenHasIrReadScope,
 } from "./ir-views";
@@ -28,7 +30,10 @@ describe("tokenHasIrReadScope", () => {
 
 describe("cursor", () => {
   it("round-trips", () => {
-    const c = { viewedAt: new Date("2026-09-01T10:00:00.123Z"), id: "clx123abc" };
+    const c = {
+      viewedAt: new Date("2026-09-01T10:00:00.123Z"),
+      id: "clx123abc",
+    };
     const back = decodeCursor(encodeCursor(c));
     assert.deepEqual(back, c);
   });
@@ -57,6 +62,54 @@ describe("cursor", () => {
   });
 });
 
+describe("parseSince", () => {
+  it("accepts ISO datetimes with an explicit timezone", () => {
+    assert.equal(parseSince(undefined), null);
+    assert.deepEqual(
+      parseSince("2026-09-29T00:00:00+02:00"),
+      new Date("2026-09-28T22:00:00Z"),
+    );
+    assert.deepEqual(
+      parseSince("2026-09-29T00:00Z"),
+      new Date("2026-09-29T00:00:00Z"),
+    );
+  });
+  it("rejects naive or malformed values", () => {
+    assert.equal(parseSince("2026-09-29"), "invalid");
+    assert.equal(parseSince("2026-09-29T00:00:00"), "invalid");
+    assert.equal(parseSince("2026-13-45T00:00:00Z"), "invalid");
+    assert.equal(parseSince(["2026-09-29T00:00:00Z"]), "invalid");
+  });
+});
+
+describe("buildViewsWhere", () => {
+  const settledBefore = new Date("2026-09-29T10:00:00Z");
+  it("always scopes to the token's team and the settle window", () => {
+    assert.deepEqual(
+      buildViewsWhere({
+        teamId: "t1",
+        cursor: null,
+        since: null,
+        settledBefore,
+      }),
+      { link: { teamId: "t1" }, viewedAt: { lte: settledBefore } },
+    );
+  });
+  it("combines since and cursor without dropping the settle bound", () => {
+    const since = new Date("2026-09-28T22:00:00Z");
+    const at = new Date("2026-09-29T08:00:00Z");
+    const where = buildViewsWhere({
+      teamId: "t1",
+      cursor: { viewedAt: at, id: "c1" },
+      since,
+      settledBefore,
+    });
+    assert.deepEqual(where.viewedAt, { lte: settledBefore, gte: since });
+    assert.deepEqual(where.link, { teamId: "t1" });
+    assert.equal(where.OR?.length, 2);
+  });
+});
+
 describe("parseLimit", () => {
   it("defaults and clamps", () => {
     assert.equal(parseLimit(undefined), IR_VIEWS_DEFAULT_LIMIT);
@@ -64,6 +117,12 @@ describe("parseLimit", () => {
     assert.equal(parseLimit("abc"), IR_VIEWS_DEFAULT_LIMIT);
     assert.equal(parseLimit("25"), 25);
     assert.equal(parseLimit("99999"), IR_VIEWS_MAX_LIMIT);
+    assert.equal(parseLimit("500"), 500);
+    assert.equal(parseLimit("501"), IR_VIEWS_MAX_LIMIT);
+    assert.equal(parseLimit("10abc"), IR_VIEWS_DEFAULT_LIMIT);
+    assert.equal(parseLimit("-5"), IR_VIEWS_DEFAULT_LIMIT);
+    assert.equal(parseLimit("1e3"), IR_VIEWS_DEFAULT_LIMIT);
+    assert.equal(parseLimit(["5", "6"]), IR_VIEWS_DEFAULT_LIMIT);
   });
 });
 
@@ -90,7 +149,10 @@ describe("serializeView", () => {
   });
   it("normalises declared emails and never exposes verified", () => {
     const out = serializeView({ ...base, viewerEmail: "  Jane@Fund.COM " });
-    assert.deepEqual(out.viewer, { kind: "declared_email", email: "jane@fund.com" });
+    assert.deepEqual(out.viewer, {
+      kind: "declared_email",
+      email: "jane@fund.com",
+    });
     assert.equal("verified" in out, false);
     assert.equal("viewerName" in out, false);
   });
