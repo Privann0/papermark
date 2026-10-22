@@ -1,29 +1,35 @@
 import { NextApiRequest, NextApiResponse } from "next";
 
+import {
+  type DataroomCardLayout,
+  DataroomCardLayoutSchema,
+  type DataroomViewerHeaderStyle,
+  DataroomViewerHeaderStyleSchema,
+  type DataroomViewerLayoutPreset,
+  DataroomViewerLayoutPresetSchema,
+} from "@/ee/features/branding/lib/dataroom-viewer-layout";
+import { upsertDataroomBrandAndClearInherited } from "@/ee/features/branding/lib/upsert-dataroom-brand";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { del } from "@vercel/blob";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 
-import {
-  DataroomCardLayoutSchema,
-  DataroomViewerHeaderStyleSchema,
-  DataroomViewerLayoutPresetSchema,
-  type DataroomCardLayout,
-  type DataroomViewerHeaderStyle,
-  type DataroomViewerLayoutPreset,
-} from "@/ee/features/branding/lib/dataroom-viewer-layout";
 import { validateRedirectUrl } from "@/lib/api/domains/validate-redirect-url";
+import { enforceDataroomMemberScope } from "@/lib/api/rbac/guard";
 import {
   teamPlanAllowsCustomWelcomeAndCta,
   teamPlanAllowsLayoutCustomization,
+  teamPlanAllowsVisitorLanguage,
 } from "@/lib/billing/team-plan-custom-messaging";
 import { errorhandler } from "@/lib/errorHandler";
+import { DEFAULT_LOCALE, SUPPORTED_LOCALE_CODES } from "@/lib/i18n/locales";
 import prisma from "@/lib/prisma";
 import { CustomUser } from "@/lib/types";
 
 const updateDataroomBrandingSchema = z.object({
   logo: z.string().nullable().optional(),
+  // Nullable on purpose: null clears the override so the team setting applies.
+  hideLogo: z.boolean().nullable().optional(),
   banner: z.string().nullable().optional(),
   brandColor: z.string().nullable().optional(),
   accentColor: z.string().nullable().optional(),
@@ -42,6 +48,12 @@ const updateDataroomBrandingSchema = z.object({
   viewerLayoutPreset: DataroomViewerLayoutPresetSchema.optional(),
   viewerHeaderStyle: DataroomViewerHeaderStyleSchema.optional(),
   hideFolderIconsInMain: z.boolean().optional(),
+  // Admin-chosen viewer language. Constrained to the server's supported list
+  // so a hand-crafted request can't poison the DB with a code the viewer
+  // can't load translations for.
+  defaultLanguage: z
+    .enum(SUPPORTED_LOCALE_CODES as unknown as [string, ...string[]])
+    .optional(),
 });
 
 type LayoutFields = {
@@ -108,37 +120,57 @@ export default async function handle(
     id: string;
   };
 
+  const userId = (session.user as CustomUser).id;
+
+  const membership = await prisma.userTeam.findUnique({
+    where: {
+      userId_teamId: {
+        userId,
+        teamId,
+      },
+    },
+    select: {
+      role: true,
+    },
+  });
+
+  if (!membership) {
+    return res.status(403).end("Unauthorized to access this team");
+  }
+
+  // Scoped members may only manage branding for their assigned rooms.
+  if (
+    await enforceDataroomMemberScope({
+      userId,
+      teamId,
+      dataroomId,
+      res,
+      role: membership.role,
+    })
+  ) {
+    return;
+  }
+
+  let roomBrandId: string | null = null;
   try {
-    const team = await prisma.team.findUnique({
-      where: {
-        id: teamId,
-        users: {
-          some: {
-            userId: (session.user as CustomUser).id,
-          },
-        },
-      },
-      select: {
-        id: true,
-      },
-    });
-
-    if (!team) {
-      return res.status(403).end("Unauthorized to access this team");
-    }
-
     const dataroom = await prisma.dataroom.findUnique({
       where: {
         id: dataroomId,
         teamId: teamId,
+      },
+      select: {
+        id: true,
+        brandId: true,
       },
     });
 
     if (!dataroom) {
       return res.status(404).end("Dataroom not found");
     }
+    roomBrandId = dataroom.brandId;
   } catch (error) {
     errorhandler(error, res);
+    return;
   }
 
   if (req.method === "GET") {
@@ -148,12 +180,10 @@ export default async function handle(
         dataroomId,
       },
     });
-
-    if (!brand) {
-      return res.status(200).json(null);
-    }
-
-    return res.status(200).json(brand);
+    return res.status(200).json({
+      brand,
+      dataroomBrandId: roomBrandId,
+    });
   } else if (req.method === "POST") {
     // POST /api/teams/:teamId/datarooms/:id/branding
     const teamAuth = await prisma.team.findFirst({
@@ -168,6 +198,7 @@ export default async function handle(
     }
     const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(teamAuth.plan);
     const layoutAllowed = teamPlanAllowsLayoutCustomization(teamAuth.plan);
+    const languageAllowed = teamPlanAllowsVisitorLanguage(teamAuth.plan);
 
     const parsed = updateDataroomBrandingSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -188,6 +219,15 @@ export default async function handle(
         })
       : {};
 
+    // English is free on every plan; non-English requires a Data Rooms tier.
+    // A hand-crafted request from a lower plan is silently dropped instead of
+    // erroring so the rest of the branding save still succeeds.
+    const languageData =
+      body.defaultLanguage &&
+      (languageAllowed || body.defaultLanguage === DEFAULT_LOCALE)
+        ? { defaultLanguage: body.defaultLanguage }
+        : {};
+
     let validatedCtaUrl: string | null | undefined = body.ctaUrl;
     if (messagingAllowed && typeof body.ctaUrl === "string") {
       const ctaValidation = await validateRedirectUrl(body.ctaUrl, teamId);
@@ -197,9 +237,12 @@ export default async function handle(
       validatedCtaUrl = ctaValidation.url;
     }
 
-    const brand = await prisma.dataroomBrand.create({
+    const brand = await upsertDataroomBrandAndClearInherited({
+      dataroomId,
+      teamId,
       data: {
         logo: body.logo ?? undefined,
+        hideLogo: body.hideLogo,
         banner: body.banner ?? undefined,
         brandColor: body.brandColor ?? undefined,
         accentColor: body.accentColor ?? undefined,
@@ -209,26 +252,26 @@ export default async function handle(
             ? body.applyAccentColorToDataroomView
             : undefined,
         welcomeMessage: messagingAllowed ? body.welcomeMessage : null,
-        ctaLabel: messagingAllowed ? body.ctaLabel ?? undefined : undefined,
-        ctaUrl: messagingAllowed ? validatedCtaUrl ?? undefined : undefined,
+        ctaLabel: messagingAllowed ? (body.ctaLabel ?? undefined) : undefined,
+        ctaUrl: messagingAllowed ? (validatedCtaUrl ?? undefined) : undefined,
         customLinkPreviewEnabled:
           messagingAllowed && typeof body.customLinkPreviewEnabled === "boolean"
             ? body.customLinkPreviewEnabled
             : false,
         linkPreviewTitle: messagingAllowed
-          ? body.linkPreviewTitle ?? undefined
+          ? (body.linkPreviewTitle ?? undefined)
           : undefined,
         linkPreviewDescription: messagingAllowed
-          ? body.linkPreviewDescription ?? undefined
+          ? (body.linkPreviewDescription ?? undefined)
           : undefined,
         linkPreviewImage: messagingAllowed
-          ? body.linkPreviewImage ?? undefined
+          ? (body.linkPreviewImage ?? undefined)
           : undefined,
         linkPreviewFavicon: messagingAllowed
-          ? body.linkPreviewFavicon ?? undefined
+          ? (body.linkPreviewFavicon ?? undefined)
           : undefined,
         ...layoutData,
-        dataroomId,
+        ...languageData,
       },
     });
 
@@ -247,6 +290,7 @@ export default async function handle(
     }
     const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(teamAuth.plan);
     const layoutAllowed = teamPlanAllowsLayoutCustomization(teamAuth.plan);
+    const languageAllowed = teamPlanAllowsVisitorLanguage(teamAuth.plan);
 
     const parsed = updateDataroomBrandingSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -290,12 +334,21 @@ export default async function handle(
         })
       : {};
 
-    const brand = await prisma.dataroomBrand.update({
-      where: {
-        dataroomId,
-      },
+    // English is free on every plan; non-English requires a Data Rooms tier.
+    // When a lower-plan request supplies a paid locale we omit the field so
+    // any existing saved value is preserved.
+    const languageData =
+      body.defaultLanguage &&
+      (languageAllowed || body.defaultLanguage === DEFAULT_LOCALE)
+        ? { defaultLanguage: body.defaultLanguage }
+        : {};
+
+    const brand = await upsertDataroomBrandAndClearInherited({
+      dataroomId,
+      teamId,
       data: {
         logo: body.logo,
+        hideLogo: body.hideLogo,
         banner: body.banner,
         brandColor: body.brandColor,
         accentColor: body.accentColor,
@@ -323,6 +376,7 @@ export default async function handle(
           ? body.linkPreviewFavicon
           : undefined,
         ...layoutData,
+        ...languageData,
       },
     });
 

@@ -7,13 +7,14 @@ import {
   PRO_PLAN_LIMITS,
 } from "@/ee/limits/constants";
 import { stripeInstance } from "@/ee/stripe";
+import { getSubscriptionPeriod } from "@/ee/stripe/compat";
 import { waitUntil } from "@vercel/functions";
 import Stripe from "stripe";
 
 import { sendUpgradePersonalEmail } from "@/lib/emails/send-upgrade-personal-welcome";
 import { sendUpgradePlanEmail } from "@/lib/emails/send-upgrade-plan";
 import prisma from "@/lib/prisma";
-import { sendUpgradeOneMonthCheckinEmailTask } from "@/lib/trigger/send-scheduled-email";
+import { sendUpgradeOneMonthCheckinEmailTask } from "@/lib/trigger/send-upgrade-checkin-email";
 import { log } from "@/lib/utils";
 
 import { getPlanFromPriceId } from "../utils";
@@ -39,11 +40,22 @@ export async function checkoutSessionCompleted(
   const subscription = await stripe.subscriptions.retrieve(
     checkoutSession.subscription as string,
   );
-  const priceId = subscription.items.data[0].price.id;
+  const subscriptionItem = subscription.items.data[0];
+
+  if (!subscriptionItem) {
+    await log({
+      message: `Stripe subscription ${subscription.id} has no subscription item`,
+      type: "error",
+    });
+    return;
+  }
+
+  const period = getSubscriptionPeriod(subscription);
+  const priceId = subscriptionItem.price.id;
   const subscriptionId = subscription.id;
-  const subscriptionStart = new Date(subscription.current_period_start * 1000);
-  const subscriptionEnd = new Date(subscription.current_period_end * 1000);
-  const quantity = subscription.items.data[0].quantity;
+  const subscriptionStart = new Date(period.start * 1000);
+  const subscriptionEnd = new Date(period.end * 1000);
+  const quantity = subscriptionItem.quantity;
 
   console.log("subscription", subscription);
   console.log("subscription items", subscription.items.data);

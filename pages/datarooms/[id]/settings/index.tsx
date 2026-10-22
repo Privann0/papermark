@@ -2,10 +2,13 @@ import { useState } from "react";
 
 import { useTeam } from "@/context/team-context";
 import { AgentsSettingsCard } from "@/ee/features/ai/components/agents-settings-card";
+import { RequestListSettingsCard } from "@/ee/features/request-lists/components/request-list-settings-card";
+import { useRequestListFeatureEnabled } from "@/ee/features/request-lists/lib/use-request-list-feature";
 import { Check, CircleHelpIcon, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { mutate } from "swr";
 
+import { useSelfMembership } from "@/lib/hooks/use-self-membership";
 import { useDataroom } from "@/lib/swr/use-dataroom";
 
 import DataroomTagSection from "@/components/datarooms/settings/dataroom-tag-section";
@@ -28,6 +31,8 @@ export default function Settings() {
   const { dataroom } = useDataroom();
   const teamInfo = useTeam();
   const teamId = teamInfo?.currentTeam?.id;
+  const { isDataroomMember } = useSelfMembership();
+  const isRequestListEnabled = useRequestListFeatureEnabled();
   const [isCopied, setIsCopied] = useState(false);
 
   if (!dataroom) {
@@ -168,7 +173,18 @@ export default function Settings() {
               vectorStoreId={dataroom.vectorStoreId}
             />
 
-            <DuplicateDataroom dataroomId={dataroom.id} teamId={teamId} />
+            {/* Request List Settings */}
+            {isRequestListEnabled && (
+              <RequestListSettingsCard
+                dataroomId={dataroom.id}
+                teamId={teamId!}
+                requestListEnabled={dataroom.requestListEnabled}
+              />
+            )}
+
+            {!isDataroomMember && (
+              <DuplicateDataroom dataroomId={dataroom.id} teamId={teamId} />
+            )}
             <Card className="bg-transparent">
               <CardHeader>
                 <CardTitle>Dataroom ID</CardTitle>

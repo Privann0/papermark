@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import ConfidentialViewSection from "@/ee/features/permissions/components/confidential-view/confidential-view-section";
 import { PlanEnum } from "@/ee/stripe/constants";
 import { LinkAudienceType, LinkType } from "@prisma/client";
 import { LinkPreset } from "@prisma/client";
@@ -192,6 +193,11 @@ export const OnboardingLinkOptions = ({
           isDatarooms ||
           isDataroomsPlus
         }
+        handleUpgradeStateChange={handleUpgradeStateChange}
+      />
+      <ConfidentialViewSection
+        {...{ data, setData }}
+        isAllowed={isTrial || isBusiness || isDatarooms || isDataroomsPlus}
         handleUpgradeStateChange={handleUpgradeStateChange}
       />
       <WatermarkSection

@@ -1,10 +1,17 @@
 import { NextApiRequest, NextApiResponse } from "next";
 
 import { isTeamPausedById } from "@/ee/features/billing/cancellation/lib/is-team-paused";
+import { resolveOwnedBrandId } from "@/ee/features/branding/lib/resolve-base-brand";
 import { LinkAudienceType, Tag } from "@prisma/client";
 import { waitUntil } from "@vercel/functions";
 import { getServerSession } from "next-auth/next";
 
+import {
+  assertDocumentAccess,
+  canAccessDataroom,
+  getAllowedDataroomIds,
+} from "@/lib/api/rbac/entitlements";
+import { isDataroomScopedRole } from "@/lib/api/rbac/permissions";
 import { errorhandler } from "@/lib/errorHandler";
 import prisma from "@/lib/prisma";
 import { CustomUser, WatermarkConfigSchema } from "@/lib/types";
@@ -86,11 +93,37 @@ export default async function handler(
             teamId,
           },
         },
-        select: { teamId: true },
+        select: { teamId: true, role: true },
       });
 
       if (!teamAccess) {
         return res.status(401).json({ error: "Unauthorized." });
+      }
+
+      // Dataroom-scoped members may only create links for documents/datarooms
+      // within their assigned rooms.
+      if (isDataroomScopedRole(teamAccess.role)) {
+        const allowedIds = await getAllowedDataroomIds(userId, teamId);
+        if (dataroomLink) {
+          if (!canAccessDataroom(teamAccess.role, allowedIds, targetId)) {
+            return res
+              .status(403)
+              .json({ error: "You do not have access to this data room." });
+          }
+        } else if (documentLink) {
+          const hasAccess = await assertDocumentAccess({
+            role: teamAccess.role,
+            userId,
+            teamId,
+            documentId: targetId,
+            allowedIds,
+          });
+          if (!hasAccess) {
+            return res
+              .status(403)
+              .json({ error: "You do not have access to this document." });
+          }
+        }
       }
 
       // Check if team is paused
@@ -239,8 +272,7 @@ export default async function handler(
 
         if (validGroups.length !== linkData.visitorGroupIds.length) {
           return res.status(400).json({
-            error:
-              "One or more visitor group IDs do not belong to this team.",
+            error: "One or more visitor group IDs do not belong to this team.",
           });
         }
       }
@@ -294,6 +326,8 @@ export default async function handler(
         }
       }
 
+      const resolvedBrandId = await resolveOwnedBrandId(teamId, linkData.brandId);
+
       // Fetch the link and its related document from the database
       const updatedLink = await prisma.$transaction(async (tx) => {
         const link = await tx.link.create({
@@ -319,12 +353,14 @@ export default async function handler(
             enableNotification: linkData.enableNotification,
             enableFeedback: linkData.enableFeedback,
             enableScreenshotProtection: linkData.enableScreenshotProtection,
+            enableConfidentialView: linkData.enableConfidentialView,
             enableCustomMetatag: linkData.enableCustomMetatag,
             metaTitle: linkData.metaTitle || null,
             metaDescription: linkData.metaDescription || null,
             metaImage: linkData.metaImage || null,
             metaFavicon: linkData.metaFavicon || null,
             welcomeMessage: linkData.welcomeMessage || null,
+            brandId: resolvedBrandId,
             allowList: linkData.allowList,
             denyList: linkData.denyList,
             audienceType: linkData.audienceType,

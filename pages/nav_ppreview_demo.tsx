@@ -1,23 +1,49 @@
-import { useRouter } from "next/router";
-
+import { resolveBrandLogo } from "@/ee/features/branding/lib/brand-logo";
+import { useBrandingPreviewParams } from "@/ee/features/branding/lib/use-branding-preview-params";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
+import { cn } from "@/lib/utils";
+import { determineTextColor } from "@/lib/utils/determine-text-color";
+
 export default function ViewPage() {
-  const router = useRouter();
+  // Seeded from the URL on first paint, then live-updated over postMessage so
+  // the editor never has to reload (and therefore never flashes) this iframe.
   const {
     brandLogo,
+    hideLogo,
     brandColor,
     accentColor,
     accentButtonColor,
     ctaLabel,
     ctaUrl,
-  } = router.query as {
-    brandLogo: string;
-    brandColor: string;
-    accentColor: string;
-    accentButtonColor?: string;
-    ctaLabel?: string;
-    ctaUrl?: string;
+  } = useBrandingPreviewParams();
+  const resolvedBrandLogo = resolveBrandLogo({
+    logo: brandLogo || null,
+    hideLogo: hideLogo === "1",
+  });
+  const renderBrandLogo = () => {
+    switch (resolvedBrandLogo.kind) {
+      case "custom":
+        return (
+          <img
+            className="h-10 w-28 object-contain sm:h-12 sm:w-32"
+            src={resolvedBrandLogo.src}
+            alt="Logo"
+          />
+        );
+      case "papermark":
+        return (
+          <div className="text-2xl font-bold tracking-tighter text-white">
+            Papermark
+          </div>
+        );
+      case "none":
+        return null;
+      default: {
+        const _exhaustive: never = resolvedBrandLogo;
+        return _exhaustive;
+      }
+    }
   };
 
   const safeCtaUrl = (() => {
@@ -45,18 +71,13 @@ export default function ViewPage() {
         <div className="mx-auto px-2 sm:px-6 lg:px-8">
           <div className="relative flex h-16 items-center justify-between">
             <div className="flex flex-1 items-stretch justify-start">
-              <div className="relative flex h-16 w-36 flex-shrink-0 items-center overflow-y-hidden">
-                {brandLogo ? (
-                  <img
-                    className="w-full object-contain"
-                    src={brandLogo}
-                    alt="Logo"
-                  />
-                ) : (
-                  <div className="text-2xl font-bold tracking-tighter text-white">
-                    Papermark
-                  </div>
+              <div
+                className={cn(
+                  "relative flex h-16 flex-shrink-0 items-center",
+                  resolvedBrandLogo.kind !== "none" && "w-36",
                 )}
+              >
+                {renderBrandLogo()}
               </div>
             </div>
             <div className="absolute inset-y-0 right-0 flex items-center space-x-4 pr-2 sm:static sm:inset-auto sm:ml-6 sm:pr-0">
@@ -65,10 +86,13 @@ export default function ViewPage() {
                   href={safeCtaUrl!}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium text-white"
+                  className="inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium"
                   style={{
                     backgroundColor:
                       accentButtonColor || brandColor || "#000000",
+                    color: determineTextColor(
+                      accentButtonColor || brandColor || "#000000",
+                    ),
                   }}
                 >
                   {ctaLabel}

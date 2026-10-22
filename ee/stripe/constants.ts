@@ -22,6 +22,7 @@ export type PeriodType = "monthly" | "yearly";
 
 export interface Feature {
   id: string;
+  aliasIds?: string[];
   text: string;
   highlight?: boolean;
   tooltip?: string;
@@ -80,7 +81,12 @@ export const BASE_FEATURES: Record<PlanEnum, PlanFeatures> = {
   [PlanEnum.Pro]: {
     featureIntro: "Everything in Free, plus:",
     features: [
-      { id: "users", text: "1 team member included", isUsers: true, usersIncluded: 1 },
+      {
+        id: "users",
+        text: "1 team member included",
+        isUsers: true,
+        usersIncluded: 1,
+      },
       { id: "documents", text: "300 documents" },
       { id: "links", text: "Unlimited links" },
       { id: "folder", text: "Folder organization" },
@@ -91,7 +97,11 @@ export const BASE_FEATURES: Record<PlanEnum, PlanFeatures> = {
       { id: "branding", text: "Remove Papermark branding" },
       { id: "custom-branding", text: "Custom branding" },
       // { id: "retention", text: "1-year analytics retention" },
-      { id: "no-datarooms", text: "No datarooms included", isNotIncluded: true },
+      {
+        id: "no-datarooms",
+        text: "No datarooms included",
+        isNotIncluded: true,
+      },
     ],
   },
   [PlanEnum.Business]: {
@@ -104,10 +114,11 @@ export const BASE_FEATURES: Record<PlanEnum, PlanFeatures> = {
         usersIncluded: 3,
       },
       { id: "folder-sharing", text: "Folder sharing" },
-      { 
-        id: "datarooms", 
+      {
+        id: "datarooms",
         text: "Multi-file sharing",
-        tooltip: "Allow you to share multiple files and folders in a single links. Simplified data rooms settings for sharing multiple files and folders. "
+        tooltip:
+          "Allow you to share multiple files and folders in a single links. Simplified data rooms settings for sharing multiple files and folders. ",
       },
       { id: "documents", text: "1000 documents" },
       { id: "custom-branding", text: "Custom branding" },
@@ -120,7 +131,7 @@ export const BASE_FEATURES: Record<PlanEnum, PlanFeatures> = {
       { id: "screenshot", text: "Screenshot protection" },
       { id: "email-verify", text: "Require email verification" },
       { id: "allow-block", text: "Allow/Block list" },
-     
+
       { id: "webhooks", text: "Webhooks" },
       // { id: "file-types-advanced", text: "More file types: dwg, kml, zip" },
       { id: "retention", text: "2-year analytics retention" },
@@ -137,20 +148,20 @@ export const BASE_FEATURES: Record<PlanEnum, PlanFeatures> = {
       },
       { id: "datarooms", text: "Unlimited data rooms" },
       // { id: "documents", text: "Unlimited documents" },
-       { id: "folder-levels", text: "Unlimited folder levels" },
+      { id: "folder-levels", text: "Unlimited folder levels" },
       {
         id: "custom-domain",
         text: "Custom domain for data rooms",
         isCustomDomain: true,
       },
-       { id: "dataroom-branding", text: "Data room branding" },
+      { id: "dataroom-branding", text: "Data room branding" },
       { id: "analytics", text: "Data room analytics" },
       { id: "nda", text: "NDA agreements" },
       { id: "watermark", text: "Dynamic watermark" },
       { id: "permissions", text: "Granular file level permissions" },
       { id: "groups", text: "Data room groups" },
       // { id: "audit", text: "Audit log for viewers" },
-    
+
       { id: "onboarding", text: "Priority support" },
       // { id: "retention", text: "2-year analytics retention" },
     ],
@@ -181,7 +192,10 @@ export const BASE_FEATURES: Record<PlanEnum, PlanFeatures> = {
       { id: "indexing", text: "Automatic file indexing" },
       { id: "invite", text: "Dataroom update notifications" },
       { id: "soc2", text: "SOC 2 Type II certified" },
-      { id: "account-manager", text: "Dedicated account manager & 24/7 support" },
+      {
+        id: "account-manager",
+        text: "Dedicated account manager & 24/7 support",
+      },
       // { id: "support", text: "24/7 priority support" },
       // { id: "retention", text: "3-year analytics retention" },
     ],
@@ -208,8 +222,10 @@ export const BASE_FEATURES: Record<PlanEnum, PlanFeatures> = {
       { id: "whitelabel", text: "White labeling" },
       { id: "api", text: "Full API access" },
       { id: "security", text: "Advanced security and certification" },
-      { id: "onboarding", text: "Priority onboarding & Dedicated support team" },
-  
+      {
+        id: "onboarding",
+        text: "Priority onboarding & Dedicated support team",
+      },
     ],
   },
   [PlanEnum.DataRoomsUnlimited]: {

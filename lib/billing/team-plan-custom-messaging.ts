@@ -53,6 +53,24 @@ export function teamPlanAllowsLayoutCustomization(
 }
 
 /**
+ * Visitor language picker (dataroom branding → Language) is gated to the
+ * Data Rooms Plus tier and above (or any active dataroom trial). English is
+ * the always-free default and is enforced separately at the call site.
+ */
+export function teamPlanAllowsVisitorLanguage(
+  plan: string | null | undefined,
+): boolean {
+  if (!plan || plan === "free") return false;
+  if (plan.includes("drtrial")) return true;
+  const base = plan.split("+")[0];
+  return (
+    base === "datarooms-plus" ||
+    base === "datarooms-premium" ||
+    base === "datarooms-unlimited"
+  );
+}
+
+/**
  * Whether the Layouts UI should be rendered at all in the global branding /
  * dataroom branding screens. Free plans have no exposure to it; Business and
  * higher (or any dataroom trial) can see and tweak the controls.

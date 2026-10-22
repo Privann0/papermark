@@ -22,9 +22,13 @@ type DefaultPermissionStrategy =
   | "ASK_EVERY_TIME"
   | "HIDDEN_BY_DEFAULT";
 
+type RootItemAccess = "VIEW_ONLY" | "VIEW_AND_DOWNLOAD" | "HIDDEN";
+
 type PermissionField =
   | "defaultPermissionStrategy"
-  | "defaultGroupPermissionStrategy";
+  | "defaultGroupPermissionStrategy"
+  | "defaultRootItemAccess"
+  | "defaultGroupRootItemAccess";
 
 interface DataroomPermissionData {
   id: string;
@@ -32,22 +36,26 @@ interface DataroomPermissionData {
   pId: string;
   defaultPermissionStrategy: DefaultPermissionStrategy;
   defaultGroupPermissionStrategy: DefaultPermissionStrategy;
+  defaultRootItemAccess: RootItemAccess;
+  defaultGroupRootItemAccess: RootItemAccess;
 }
 
 interface PermissionSettingsProps {
   dataroomId: string;
 }
 
-const STRATEGY_OPTIONS: {
-  value: DefaultPermissionStrategy;
+type SettingOption = {
+  value: string;
   label: string;
   description: string;
-}[] = [
+};
+
+const STRATEGY_OPTIONS: SettingOption[] = [
   {
     value: "INHERIT_FROM_PARENT",
     label: "Inherit from parent folder",
     description:
-      "New documents and folders inherit permissions from their parent folder. Root-level items get view-only by default.",
+      "New documents and folders inherit permissions from the folder they are placed in. Root-level items use the root-level access setting below.",
   },
   {
     value: "ASK_EVERY_TIME",
@@ -63,11 +71,34 @@ const STRATEGY_OPTIONS: {
   },
 ];
 
-const SCOPES: {
+const ROOT_ACCESS_OPTIONS: SettingOption[] = [
+  {
+    value: "VIEW_ONLY",
+    label: "View only",
+    description:
+      "Root-level documents and folders become viewable (not downloadable) for every group.",
+  },
+  {
+    value: "VIEW_AND_DOWNLOAD",
+    label: "View and download",
+    description:
+      "Root-level documents and folders become viewable and downloadable for every group.",
+  },
+  {
+    value: "HIDDEN",
+    label: "Hidden",
+    description:
+      "Root-level documents and folders stay hidden until access is granted manually.",
+  },
+];
+
+type Scope = {
   key: PermissionField;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-}[] = [
+};
+
+const STRATEGY_SCOPES: Scope[] = [
   {
     key: "defaultGroupPermissionStrategy",
     label: "Groups",
@@ -75,6 +106,19 @@ const SCOPES: {
   },
   {
     key: "defaultPermissionStrategy",
+    label: "Links",
+    icon: LinkIcon,
+  },
+];
+
+const ROOT_ACCESS_SCOPES: Scope[] = [
+  {
+    key: "defaultGroupRootItemAccess",
+    label: "Groups",
+    icon: UsersIcon,
+  },
+  {
+    key: "defaultRootItemAccess",
     label: "Links",
     icon: LinkIcon,
   },
@@ -100,7 +144,7 @@ export default function PermissionSettings({
 
   const handlePermissionChange = async (
     field: PermissionField,
-    value: DefaultPermissionStrategy,
+    value: string,
   ) => {
     if (!dataroomId || !teamId || updatingField || !dataroomData) return;
     setUpdatingField(field);
@@ -145,79 +189,124 @@ export default function PermissionSettings({
     }
   };
 
-  const values: Record<PermissionField, DefaultPermissionStrategy> = {
+  const values: Record<PermissionField, string> = {
     defaultGroupPermissionStrategy:
       dataroomData?.defaultGroupPermissionStrategy ?? "INHERIT_FROM_PARENT",
     defaultPermissionStrategy:
       dataroomData?.defaultPermissionStrategy ?? "INHERIT_FROM_PARENT",
+    defaultGroupRootItemAccess:
+      dataroomData?.defaultGroupRootItemAccess ?? "VIEW_ONLY",
+    defaultRootItemAccess: dataroomData?.defaultRootItemAccess ?? "VIEW_ONLY",
   };
 
   const disabled = updatingField !== null || !dataroomData;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Default File Permissions</CardTitle>
-        <CardDescription>
-          Configure how new documents and folders are exposed to groups and
-          links. Each scope is set independently.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="grid grid-cols-[1fr_auto] gap-x-8 gap-y-1">
-          <div />
-          <div className="flex items-center gap-1">
-            {SCOPES.map((scope) => (
-              <div
-                key={scope.key}
-                className="flex w-20 items-center justify-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
-              >
-                <scope.icon className="h-3 w-3" />
-                {scope.label}
-              </div>
-            ))}
-          </div>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Default File Permissions</CardTitle>
+          <CardDescription>
+            Configure how new documents and folders are exposed to groups and
+            links. Each scope is set independently.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SettingsMatrix
+            options={STRATEGY_OPTIONS}
+            scopes={STRATEGY_SCOPES}
+            values={values}
+            disabled={disabled}
+            onChange={handlePermissionChange}
+          />
+        </CardContent>
+      </Card>
 
-          {STRATEGY_OPTIONS.map((option, index) => (
-            <StrategyRow
-              key={option.value}
-              option={option}
-              values={values}
-              disabled={disabled}
-              isFirst={index === 0}
-              onChange={handlePermissionChange}
-            />
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Root-Level Item Access</CardTitle>
+          <CardDescription>
+            Items created at the top level of the dataroom have no parent folder
+            to inherit from. Choose what access groups and links get on new
+            root-level documents and folders when the strategy is &quot;Inherit
+            from parent folder&quot;.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SettingsMatrix
+            options={ROOT_ACCESS_OPTIONS}
+            scopes={ROOT_ACCESS_SCOPES}
+            values={values}
+            disabled={disabled}
+            onChange={handlePermissionChange}
+          />
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
-function StrategyRow({
+function SettingsMatrix({
+  options,
+  scopes,
+  values,
+  disabled,
+  onChange,
+}: {
+  options: SettingOption[];
+  scopes: Scope[];
+  values: Record<PermissionField, string>;
+  disabled: boolean;
+  onChange: (field: PermissionField, value: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-[1fr_auto] gap-x-8 gap-y-1">
+      <div />
+      <div className="flex items-center gap-1">
+        {scopes.map((scope) => (
+          <div
+            key={scope.key}
+            className="flex w-20 items-center justify-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+          >
+            <scope.icon className="h-3 w-3" />
+            {scope.label}
+          </div>
+        ))}
+      </div>
+
+      {options.map((option, index) => (
+        <SettingRow
+          key={option.value}
+          option={option}
+          scopes={scopes}
+          values={values}
+          disabled={disabled}
+          isFirst={index === 0}
+          onChange={onChange}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SettingRow({
   option,
+  scopes,
   values,
   disabled,
   isFirst,
   onChange,
 }: {
-  option: (typeof STRATEGY_OPTIONS)[number];
-  values: Record<PermissionField, DefaultPermissionStrategy>;
+  option: SettingOption;
+  scopes: Scope[];
+  values: Record<PermissionField, string>;
   disabled: boolean;
   isFirst: boolean;
-  onChange: (
-    field: PermissionField,
-    value: DefaultPermissionStrategy,
-  ) => void;
+  onChange: (field: PermissionField, value: string) => void;
 }) {
   return (
     <>
-      <div
-        className={cn(
-          "py-3",
-          !isFirst && "border-t border-border/60",
-        )}
-      >
+      <div className={cn("py-3", !isFirst && "border-t border-border/60")}>
         <Label
           htmlFor={`group-${option.value}`}
           className="text-sm font-medium"
@@ -234,16 +323,14 @@ function StrategyRow({
           !isFirst && "border-t border-border/60",
         )}
       >
-        {SCOPES.map((scope) => (
+        {scopes.map((scope) => (
           <div
             key={scope.key}
             className="flex w-20 items-center justify-center"
           >
             <RadioGroup
               value={values[scope.key]}
-              onValueChange={(value) =>
-                onChange(scope.key, value as DefaultPermissionStrategy)
-              }
+              onValueChange={(value) => onChange(scope.key, value)}
               disabled={disabled}
               aria-label={`${scope.label} default`}
             >

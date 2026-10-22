@@ -65,41 +65,56 @@ export default async function handler(
     const { client, config } = await getTeamS3ClientAndConfig(teamId);
 
     if (config.distributionHost) {
-      // CloudFront signed URLs DO honor `response-content-disposition` if S3
-      // is the origin and the distribution forwards that query param. The
-      // catch is that `@aws-sdk/cloudfront-signer` mangles the encoding when
-      // it parses the URL, so the resulting URL fails with AccessDenied.
-      // Workaround: set the param via URL.searchParams (so it's part of the
-      // signed policy) and then re-set it on the signed output to fix the
-      // encoding.
-      // See https://obviy.us/blog/cloudfront-signed-disposition/
       const distributionUrl = new URL(
         key,
         `https://${config.distributionHost}`,
       );
-      if (responseContentDisposition) {
-        distributionUrl.searchParams.set(
-          "response-content-disposition",
-          responseContentDisposition,
-        );
+
+      if (!responseContentDisposition) {
+        const url = getCloudfrontSignedUrl({
+          url: distributionUrl.toString(),
+          keyPairId: `${config.distributionKeyId}`,
+          privateKey: `${config.distributionKeyContents}`,
+          dateLessThan: new Date(Date.now() + expiration).toISOString(),
+        });
+
+        return res.status(200).json({ url });
       }
 
-      const signed = getCloudfrontSignedUrl({
-        url: distributionUrl.toString(),
-        keyPairId: `${config.distributionKeyId}`,
-        privateKey: `${config.distributionKeyContents}`,
-        dateLessThan: new Date(Date.now() + expiration).toISOString(),
+      // Use a custom policy (wildcard resource) when overriding
+      // Content-Disposition. The RFC 5987 `filename*=UTF-8''...` syntax
+      // contains `''`, which the canned-policy path can't sign correctly:
+      // the signer leaves `'` literal (encodeURIComponent), but browsers
+      // re-encode it to `%27` on send, so the URL no longer matches what
+      // was signed and CloudFront returns AccessDenied. Signing the
+      // Policy JSON instead of the URL bytes sidesteps the mismatch.
+      distributionUrl.searchParams.set(
+        "response-content-disposition",
+        responseContentDisposition,
+      );
+
+      const resourceBase = `https://${config.distributionHost}${distributionUrl.pathname}`;
+      const policy = JSON.stringify({
+        Statement: [
+          {
+            Resource: `${resourceBase}?*`,
+            Condition: {
+              DateLessThan: {
+                "AWS:EpochTime": Math.floor(
+                  (Date.now() + expiration) / ONE_SECOND,
+                ),
+              },
+            },
+          },
+        ],
       });
 
-      let url = signed;
-      if (responseContentDisposition) {
-        const fixed = new URL(signed);
-        fixed.searchParams.set(
-          "response-content-disposition",
-          responseContentDisposition,
-        );
-        url = fixed.href;
-      }
+      const url = getCloudfrontSignedUrl({
+        url: distributionUrl.toString(),
+        policy,
+        keyPairId: `${config.distributionKeyId}`,
+        privateKey: `${config.distributionKeyContents}`,
+      });
 
       return res.status(200).json({ url });
     }

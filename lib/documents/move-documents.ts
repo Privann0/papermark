@@ -87,6 +87,12 @@ export const moveDocumentToFolder = async ({
     mutate(
       `/api/teams/${teamId}${newPath ? `/folder-documents/${newPath}` : "/documents"}`,
     );
+    // refresh each moved document's detail data to reflect the new folder
+    documentIds.forEach((documentId) => {
+      const encodedId = encodeURIComponent(documentId);
+      mutate(`/api/teams/${teamId}/documents/${encodedId}/overview`);
+      mutate(`/api/teams/${teamId}/documents/${encodedId}`);
+    });
     toast.success(
       `${updatedCount} document${updatedCount > 1 ? "s" : ""} moved successfully`,
     );

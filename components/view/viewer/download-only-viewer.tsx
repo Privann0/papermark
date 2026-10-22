@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { useEffect, useRef } from "react";
 
 import { Download } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { useSafePageViewTracker } from "@/lib/tracking/safe-page-view-tracker";
@@ -29,6 +30,7 @@ export default function DownloadOnlyViewer({
   navData: TNavData;
 }) {
   const router = useRouter();
+  const { t } = useTranslation("viewer");
   const startTimeRef = useRef(Date.now());
   const visibilityRef = useRef<boolean>(true);
 
@@ -66,10 +68,10 @@ export default function DownloadOnlyViewer({
       );
     };
 
-    if (router.query.token) {
+    if (router.isReady && router.query.token) {
       removeQueryParams(["token", "email", "domain", "slug", "linkId"]);
     }
-  }, []);
+  }, [router, router.isReady]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -194,7 +196,7 @@ export default function DownloadOnlyViewer({
 
   const downloadFile = async () => {
     if (isPreview) {
-      toast.error("You cannot download documents in preview mode.");
+      toast.error(t("toasts.cannotDownloadPreview", "You cannot download documents in preview mode."));
       return;
     }
     if (!allowDownload) return;
@@ -209,9 +211,9 @@ export default function DownloadOnlyViewer({
     });
 
     toast.promise(downloadPromise, {
-      loading: "Preparing download...",
-      success: "File downloaded successfully",
-      error: (err) => err.message || "Failed to download file",
+      loading: t("toasts.preparingDownload", "Preparing download..."),
+      success: t("toasts.downloadSuccess", "File downloaded successfully"),
+      error: (err) => err.message || t("toasts.downloadFailed", "Failed to download file"),
     });
   };
 
@@ -227,15 +229,15 @@ export default function DownloadOnlyViewer({
             <Download className="h-12 w-12 text-gray-600 dark:text-gray-300" />
           </div>
           <h2 className="text-xl font-medium text-gray-900 dark:text-gray-100">
-            {documentName || "Download Document"}
+            {documentName || t("downloadOnly.title", "Download Document")}
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            This document is available for download only
+            {t("downloadOnly.description", "This document is available for download only")}
           </p>
           {allowDownload && (
             <Button onClick={downloadFile} className="w-full space-x-2">
               <Download className="h-4 w-4" />
-              <span>Download Now</span>
+              <span>{t("downloadOnly.button", "Download Now")}</span>
             </Button>
           )}
         </div>

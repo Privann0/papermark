@@ -23,6 +23,7 @@ export const sendEmail = async ({
   replyTo,
   scheduledAt,
   unsubscribeUrl,
+  idempotencyKey,
 }: {
   to: string;
   subject: string;
@@ -36,8 +37,10 @@ export const sendEmail = async ({
   replyTo?: string;
   scheduledAt?: string;
   unsubscribeUrl?: string;
+  idempotencyKey?: string;
 }) => {
   if (!resend) {
+    // Throw an error if resend is not initialized
     throw new Error("Resend not initialized");
   }
 
@@ -57,26 +60,32 @@ export const sendEmail = async ({
             : "JETT <noreply@jett.city>");
 
   try {
-    const { data, error } = await resend.emails.send({
-      from: fromAddress,
-      to: test ? "delivered@resend.dev" : to,
-      cc: cc,
-      replyTo: marketing ? "noreply@jett.city" : replyTo,
-      subject,
-      react,
-      scheduledAt,
-      text: plainText,
-      headers: {
-        "X-Entity-Ref-ID": nanoid(),
-        ...(unsubscribeUrl
-          ? {
-              "List-Unsubscribe": `<${unsubscribeUrl}>`,
-              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-            }
-          : {}),
+    const { data, error } = await resend.emails.send(
+      {
+        from: fromAddress,
+        to: test ? "delivered@resend.dev" : to,
+        cc: cc,
+        replyTo: marketing ? "noreply@jett.city" : replyTo,
+        subject,
+        react,
+        scheduledAt,
+        text: plainText,
+        headers: {
+          // Reusing an idempotency key with a changed payload is a 409, so the
+          // ref id has to come from the key rather than a fresh nanoid.
+          "X-Entity-Ref-ID": idempotencyKey ?? nanoid(),
+          ...(unsubscribeUrl
+            ? {
+                "List-Unsubscribe": `<${unsubscribeUrl}>`,
+                "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+              }
+            : {}),
+        },
       },
-    });
+      { idempotencyKey },
+    );
 
+    // Check if the email sending operation returned an error and throw it
     if (error) {
       log({
         message: `Resend returned error when sending email: ${error.name} \n\n ${error.message}`,
@@ -86,14 +95,16 @@ export const sendEmail = async ({
       throw error;
     }
 
+    // If there's no error, return the data
     return data;
   } catch (exception) {
+    // Log and rethrow any caught exceptions for upstream handling
     log({
       message: `Unexpected error when sending email: ${exception}`,
       type: "error",
       mention: true,
     });
-    throw exception;
+    throw exception; // Rethrow the caught exception
   }
 };
 

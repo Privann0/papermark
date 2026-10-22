@@ -5,6 +5,7 @@ import { useRouter } from "next/router";
 
 import { useEffect, useState } from "react";
 
+import { useRequestListFeatureEnabled } from "@/ee/features/request-lists/lib/use-request-list-feature";
 import { PlanEnum } from "@/ee/stripe/constants";
 import {
   BarChart3Icon,
@@ -14,8 +15,9 @@ import {
   ContactIcon,
   HouseIcon,
   LinkIcon,
+  ListChecksIcon,
   LogsIcon,
-  MessageSquareIcon,
+  MessagesSquareIcon,
   ServerIcon,
   ShieldCheckIcon,
   UsersIcon,
@@ -23,6 +25,7 @@ import {
 } from "lucide-react";
 
 import { usePlan } from "@/lib/swr/use-billing";
+import { useDataroom } from "@/lib/swr/use-dataroom";
 import useLimits from "@/lib/swr/use-limits";
 import { cn } from "@/lib/utils";
 
@@ -56,6 +59,8 @@ export function MobileDataroomMoreMenu({
   const router = useRouter();
   const { isTrial } = usePlan();
   const { limits } = useLimits();
+  const { dataroom } = useDataroom(dataroomId);
+  const isRequestListFeatureEnabled = useRequestListFeatureEnabled();
   const [settingsExpanded, setSettingsExpanded] = useState(() =>
     router.pathname.includes("/settings"),
   );
@@ -185,7 +190,7 @@ export function MobileDataroomMoreMenu({
                     >
                       <span className="flex items-center gap-2">
                         <LinkIcon className="h-4 w-4 shrink-0" />
-                        Links
+                        Access links
                       </span>
                     </Link>
                     <Link
@@ -252,7 +257,7 @@ export function MobileDataroomMoreMenu({
                   highlightItem={["qa"]}
                 >
                   <button type="button" className={rowClass(false)}>
-                    <MessageSquareIcon className="h-5 w-5" />
+                    <MessagesSquareIcon className="h-5 w-5" />
                     Q&A
                   </button>
                 </UpgradePlanModal>
@@ -264,10 +269,21 @@ export function MobileDataroomMoreMenu({
                     router.pathname.includes("conversations"),
                   )}
                 >
-                  <MessageSquareIcon className="h-5 w-5" />
+                  <MessagesSquareIcon className="h-5 w-5" />
                   Q&A
                 </Link>
               )}
+
+              {isRequestListFeatureEnabled && dataroom?.requestListEnabled ? (
+                <Link
+                  href={`${base}/tasks`}
+                  onClick={onClose}
+                  className={rowClass(router.pathname.includes("/tasks"))}
+                >
+                  <ListChecksIcon className="h-5 w-5" />
+                  Request List
+                </Link>
+              ) : null}
 
               <Link
                 href={`${base}/users`}
@@ -321,7 +337,7 @@ export function MobileDataroomMoreMenu({
               {isTrial && (
                 <div className="mt-4">
                   <Link
-                    href="/settings/upgrade?view=datarooms"
+                    href="/settings/billing/upgrade?view=datarooms"
                     onClick={onClose}
                     className="flex w-full items-center justify-center rounded-lg bg-foreground px-4 py-3 text-sm font-medium text-background transition-colors hover:bg-foreground/90"
                   >

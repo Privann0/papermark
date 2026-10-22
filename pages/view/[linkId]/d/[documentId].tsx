@@ -3,7 +3,6 @@ import { useRouter } from "next/router";
 
 import React, { useEffect, useState } from "react";
 
-import NotFound from "@/pages/404";
 import { DataroomBrand } from "@prisma/client";
 import Cookies from "js-cookie";
 import { useSession } from "next-auth/react";
@@ -13,6 +12,11 @@ import z from "zod";
 
 import { fetchLinkDataById } from "@/lib/api/links/link-data";
 import { getFeatureFlags } from "@/lib/featureFlags";
+import { useUrlPasscode } from "@/lib/hooks/use-url-passcode";
+import {
+  type ViewerI18nPageProps,
+  buildViewerI18nPageProps,
+} from "@/lib/i18n/viewer-page-props";
 import notion from "@/lib/notion";
 import {
   addSignedUrls,
@@ -24,6 +28,8 @@ import { CustomUser, LinkWithDataroomDocument, NotionTheme } from "@/lib/types";
 import LoadingSpinner from "@/components/ui/loading-spinner";
 import CustomMetaTag from "@/components/view/custom-metatag";
 import DataroomDocumentView from "@/components/view/dataroom/dataroom-document-view";
+import { ViewerI18nProvider } from "@/components/view/viewer-i18n-provider";
+import { ViewerNotFound } from "@/components/view/viewer-not-found";
 
 type DataroomDocumentLinkData = {
   linkType: "DATAROOM_LINK";
@@ -31,7 +37,7 @@ type DataroomDocumentLinkData = {
   brand: DataroomBrand | null;
 };
 
-type DataroomDocumentProps = {
+type DataroomDocumentProps = Partial<ViewerI18nPageProps> & {
   linkData: DataroomDocumentLinkData;
   notionData: {
     rootNotionPageId: string | null;
@@ -49,14 +55,14 @@ type DataroomDocumentProps = {
   showPoweredByBanner: boolean;
   showAccountCreationSlide: boolean;
   useAdvancedExcelViewer: boolean;
-  useCustomAccessForm: boolean;
+  hideFooterOnAccessForm: boolean;
   logoOnAccessForm: boolean;
   textSelectionEnabled?: boolean;
   frozen?: boolean;
   error?: boolean;
 };
 
-export default function DataroomDocumentViewPage({
+function DataroomDocumentViewPageInner({
   frozen,
   linkData,
   notionData,
@@ -64,7 +70,7 @@ export default function DataroomDocumentViewPage({
   showPoweredByBanner,
   showAccountCreationSlide,
   useAdvancedExcelViewer,
-  useCustomAccessForm,
+  hideFooterOnAccessForm,
   logoOnAccessForm,
   textSelectionEnabled,
   error,
@@ -73,6 +79,7 @@ export default function DataroomDocumentViewPage({
   const { data: session, status } = useSession();
   const [storedToken, setStoredToken] = useState<string | undefined>(undefined);
   const [storedEmail, setStoredEmail] = useState<string | undefined>(undefined);
+  const urlPasscode = useUrlPasscode();
 
   useEffect(() => {
     // Retrieve token from cookie on component mount
@@ -95,15 +102,11 @@ export default function DataroomDocumentViewPage({
   }
 
   if (frozen) {
-    return (
-      <NotFound message="This data room has been closed and is no longer available." />
-    );
+    return <ViewerNotFound reason="dataroomClosed" />;
   }
 
   if (error) {
-    return (
-      <NotFound message="Sorry, we had trouble loading this link. Please try again in a moment." />
-    );
+    return <ViewerNotFound reason="loadErrorRetry" />;
   }
 
   const {
@@ -117,6 +120,7 @@ export default function DataroomDocumentViewPage({
     previewToken?: string;
     preview?: string;
   };
+  const disableEditPassword = !!disableEditEmail && !!urlPasscode;
   const { link, brand } = linkData;
 
   // Render the document view for DATAROOM_LINK
@@ -154,16 +158,12 @@ export default function DataroomDocumentViewPage({
 
   // Check if the link is expired
   if (expiresAt && new Date(expiresAt) < new Date()) {
-    return (
-      <NotFound message="Sorry, the link you're looking for is expired." />
-    );
+    return <ViewerNotFound reason="expired" />;
   }
 
   // Check if the link is archived
   if (isArchived) {
-    return (
-      <NotFound message="Sorry, the link you're looking for is archived." />
-    );
+    return <ViewerNotFound reason="archived" />;
   }
 
   return (
@@ -189,7 +189,9 @@ export default function DataroomDocumentViewPage({
         useAdvancedExcelViewer={useAdvancedExcelViewer}
         previewToken={previewToken}
         disableEditEmail={!!disableEditEmail}
-        useCustomAccessForm={useCustomAccessForm}
+        urlPasscode={urlPasscode}
+        disableEditPassword={disableEditPassword}
+        hideFooterOnAccessForm={hideFooterOnAccessForm}
         logoOnAccessForm={logoOnAccessForm}
         token={storedToken}
         verifiedEmail={verifiedEmail}
@@ -197,6 +199,16 @@ export default function DataroomDocumentViewPage({
         textSelectionEnabled={textSelectionEnabled}
       />
     </>
+  );
+}
+
+export default function DataroomDocumentViewPage(props: DataroomDocumentProps) {
+  const locale = props.i18n?.locale ?? "en";
+  const resources = props.i18n?.resources ?? {};
+  return (
+    <ViewerI18nProvider locale={locale} resources={resources}>
+      <DataroomDocumentViewPageInner {...props} />
+    </ViewerI18nProvider>
   );
 }
 
@@ -273,6 +285,16 @@ export async function getStaticProps(context: GetStaticPropsContext) {
     // Check feature flags
     const featureFlags = await getFeatureFlags({ teamId: teamId || undefined });
     const textSelectionEnabled = featureFlags.textSelection;
+    const logoOnAccessFormEnabled = featureFlags.logoOnAccessForm;
+    const hideFooterOnAccessFormEnabled = featureFlags.hideFooterOnAccessForm;
+
+    const defaultLanguage =
+      brand && "defaultLanguage" in brand ? brand.defaultLanguage : undefined;
+    const i18nProps = await buildViewerI18nPageProps(
+      typeof defaultLanguage === "string" || defaultLanguage === null
+        ? { defaultLanguage }
+        : null,
+    );
 
     return {
       props: {
@@ -307,14 +329,10 @@ export async function getStaticProps(context: GetStaticPropsContext) {
         showPoweredByBanner: false,
         showAccountCreationSlide: false,
         useAdvancedExcelViewer: advancedExcelEnabled,
-        useCustomAccessForm:
-          teamId === "cm0154tiv0000lr2t6nr5c6kp" ||
-          teamId === "clup33by90000oewh4rfvp2eg" ||
-          teamId === "cm76hfyvy0002q623hmen99pf" ||
-          teamId === "cm9ztf0s70005js04i689gefn" ||
-          teamId === "cmk2hnmqh0000k304zcoezt6n",
-        logoOnAccessForm: teamId === "cm7nlkrhm0000qgh0nvyrrywr",
+        hideFooterOnAccessForm: hideFooterOnAccessFormEnabled,
+        logoOnAccessForm: logoOnAccessFormEnabled,
         textSelectionEnabled,
+        ...i18nProps,
       },
       revalidate: brand || recordMap ? 10 : 60,
     };

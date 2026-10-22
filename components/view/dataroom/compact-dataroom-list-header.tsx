@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 import { cn } from "@/lib/utils";
 
 import { useViewerSurfaceTheme } from "@/components/view/viewer/viewer-surface-theme";
@@ -50,6 +52,7 @@ export function CompactDataroomListHeader({
   className?: string;
 }) {
   const { palette } = useViewerSurfaceTheme();
+  const { t } = useTranslation("dataroom");
 
   return (
     <div
@@ -73,12 +76,14 @@ export function CompactDataroomListHeader({
       {showIndexColumn ? (
         <div className="text-left tabular-nums opacity-80">#</div>
       ) : null}
-      <div>Name</div>
+      <div>{t("compactList.name", "Name")}</div>
       {showUpdatedColumn ? (
-        <div className="text-right sm:text-right">Updated</div>
+        <div className="text-right sm:text-right">
+          {t("compactList.updated", "Updated")}
+        </div>
       ) : null}
       {showSettingsColumn ? (
-        <div className="text-center">Settings</div>
+        <div className="text-center">{t("compactList.settings", "Settings")}</div>
       ) : null}
     </div>
   );

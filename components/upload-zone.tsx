@@ -14,6 +14,7 @@ import { useAnalytics } from "@/lib/analytics";
 import {
   FREE_PLAN_ACCEPTED_FILE_TYPES,
   FULL_PLAN_ACCEPTED_FILE_TYPES,
+  HTML_ACCEPTED_FILE_TYPES,
   SUPPORTED_DOCUMENT_MIME_TYPES,
 } from "@/lib/constants";
 import { DocumentData, createDocument } from "@/lib/documents/create-document";
@@ -29,12 +30,16 @@ import {
   createFolderInMainDocs,
   isSystemFile,
 } from "@/lib/folders/create-folder";
+import { useFeatureFlags } from "@/lib/hooks/use-feature-flags";
 import { usePlan } from "@/lib/swr/use-billing";
 import useLimits from "@/lib/swr/use-limits";
 import { useTeamSettings } from "@/lib/swr/use-team-settings";
 import { CustomUser } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { getSupportedContentType } from "@/lib/utils/get-content-type";
+import {
+  getSupportedContentType,
+  isHtmlFile,
+} from "@/lib/utils/get-content-type";
 import {
   getFileSizeLimit,
   getFileSizeLimits,
@@ -67,7 +72,7 @@ interface FileWithPaths extends File {
 export interface RejectedFile {
   fileName: string;
   message: string;
-  reason?: "error" | "plan-limit" | "max-files";
+  reason?: "error" | "plan-limit" | "max-files" | "file-type";
   /** Individual file paths skipped due to limits — used for downloadable list */
   skippedFileNames?: string[];
 }
@@ -282,6 +287,8 @@ export default function UploadZone({
   const { data: session } = useSession();
   const { limits, canAddDocuments, isPaused } = useLimits();
   const { registerUploadTriggers } = useUploadProgress();
+  const { isFeatureEnabled } = useFeatureFlags();
+  const htmlDocumentsEnabled = isFeatureEnabled("htmlDocuments");
 
   // Refs to the two hidden file inputs rendered inside this zone. Used to
   // open the OS picker without traversing the DOM by id, so callers
@@ -335,10 +342,16 @@ export default function UploadZone({
     [limits, isFree, isTrial],
   );
 
-  const acceptableDropZoneFileTypes =
-    isFree && !isTrial
-      ? acceptableDropZoneMimeTypesWhenIsFreePlanAndNotTrial
-      : allAcceptableDropZoneMimeTypes;
+  const acceptableDropZoneFileTypes = useMemo(
+    () =>
+      isFree && !isTrial
+        ? acceptableDropZoneMimeTypesWhenIsFreePlanAndNotTrial
+        : {
+            ...allAcceptableDropZoneMimeTypes,
+            ...(htmlDocumentsEnabled ? HTML_ACCEPTED_FILE_TYPES : {}),
+          },
+    [isFree, isTrial, htmlDocumentsEnabled],
+  );
 
   // Helper function to get or create the dataroom folder in "All Documents"
   // Uses promise-lock pattern to prevent concurrent creation attempts
@@ -590,18 +603,21 @@ export default function UploadZone({
         return;
       }
 
-      const rejected = rejectedFiles.map(({ file, errors }) => {
+      const rejected = rejectedFiles.map<RejectedFile>(({ file, errors }) => {
         let message = "";
+        let reason: RejectedFile["reason"] = "error";
         if (errors.find(({ code }) => code === "file-too-large")) {
           const fileSizeLimitMB = getFileSizeLimit(file.type, fileSizeLimits);
           message = `File size too big (max. ${fileSizeLimitMB} MB). Upgrade to a paid plan to increase the limit.`;
         } else if (errors.find(({ code }) => code === "file-invalid-type")) {
           const isSupported = SUPPORTED_DOCUMENT_MIME_TYPES.includes(file.type);
-          message = `File type not supported ${
-            isFree && !isTrial && isSupported ? `on free plan` : ""
-          }`;
+          // Supported on a paid plan but blocked on free → upgrading helps.
+          // Otherwise the type is simply unsupported and upgrading won't help.
+          const isPlanLimited = isFree && !isTrial && isSupported;
+          message = `File type not supported${isPlanLimited ? " on free plan" : ""}`;
+          reason = isPlanLimited ? "plan-limit" : "file-type";
         }
-        return { fileName: file.name, message };
+        return { fileName: file.name, message, reason };
       });
       onUploadRejected(rejected);
     },
@@ -926,6 +942,14 @@ export default function UploadZone({
           let supportedFileType = getSupportedContentType(contentType) ?? "";
 
           if (
+            storageFileName.toLowerCase().endsWith(".md") ||
+            storageFileName.toLowerCase().endsWith(".markdown")
+          ) {
+            supportedFileType = "docs";
+            contentType = "text/markdown";
+          }
+
+          if (
             storageFileName.endsWith(".dwg") ||
             storageFileName.endsWith(".dxf")
           ) {
@@ -962,6 +986,11 @@ export default function UploadZone({
           if (storageFileName.endsWith(".bak")) {
             supportedFileType = "other";
             contentType = "application/x-bak";
+          }
+
+          if (isHtmlFile({ name: storageFileName, contentType })) {
+            supportedFileType = "html";
+            contentType = "text/html";
           }
 
           const documentData: DocumentData = {
@@ -1590,15 +1619,18 @@ export default function UploadZone({
       if (rejectedTypePerTopLevel.size > 0) {
         const rejectedEntries: RejectedFile[] = [];
         for (const [name, { paths, supportedOnPaid }] of rejectedTypePerTopLevel) {
+          // Only a genuine plan limit when the file type would be accepted on a
+          // paid plan and the user is actually on a free plan. Otherwise the
+          // type is simply unsupported, so upgrading wouldn't help.
+          const isPlanLimited = isFree && !isTrial && supportedOnPaid;
           rejectedEntries.push({
             fileName: `${name}: ${paths.length} file${
               paths.length !== 1 ? "s" : ""
             } not uploaded`,
-            message:
-              isFree && !isTrial && supportedOnPaid
-                ? "File type not supported on free plan"
-                : "File type not supported",
-            reason: "plan-limit",
+            message: isPlanLimited
+              ? "File type not supported on free plan"
+              : "File type not supported",
+            reason: isPlanLimited ? "plan-limit" : "file-type",
             skippedFileNames: paths,
           });
         }
@@ -1855,7 +1887,7 @@ export default function UploadZone({
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
                   {isFree && !isTrial
                     ? `Only *.pdf, *.xls, *.xlsx, *.csv, *.tsv, *.ods, *.png, *.jpeg, *.jpg`
-                    : `Only *.pdf, *.pptx, *.docx, *.xlsx, *.xls, *.csv, *.tsv, *.ods, *.ppt, *.odp, *.doc, *.odt, *.dwg, *.dxf, *.png, *.jpg, *.jpeg, *.mp4, *.mov, *.avi, *.webm, *.ogg, *.log`}
+                    : `Only *.pdf, *.pptx, *.docx, *.xlsx, *.xls, *.csv, *.tsv, *.ods, *.ppt, *.odp, *.doc, *.odt, *.md, *.dwg, *.dxf, *.png, *.jpg, *.jpeg, *.mp4, *.mov, *.avi, *.webm, *.ogg, *.log${htmlDocumentsEnabled ? ", *.html, *.htm" : ""}`}
                 </p>
               </div>
             </div>

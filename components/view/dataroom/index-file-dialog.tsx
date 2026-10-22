@@ -6,6 +6,7 @@ import {
   FileSpreadsheet,
   FileText,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { useAnalytics } from "@/lib/analytics";
@@ -29,6 +30,7 @@ interface IndexFileDialogProps {
   dataroomId: string;
   viewerEmail?: string;
   viewerId?: string;
+  isPreview?: boolean;
   /** Optional className applied to the trigger button so callers can override
    *  the default outline styling (e.g. theme it to a viewer surface color). */
   triggerClassName?: string;
@@ -41,8 +43,10 @@ export default function IndexFileDialog({
   dataroomId,
   viewerEmail,
   viewerId,
+  isPreview,
   triggerClassName,
 }: IndexFileDialogProps) {
+  const { t } = useTranslation("dataroom");
   const [isLoading, setIsLoading] = useState(false);
   const [selectedFormat, setSelectedFormat] =
     useState<IndexFileFormat>("excel");
@@ -50,8 +54,18 @@ export default function IndexFileDialog({
   const analytics = useAnalytics();
 
   const handleGenerateIndex = async () => {
+    if (isPreview) {
+      toast.error(
+        t(
+          "indexFile.previewDisabled",
+          "Generating an index file isn't available in preview mode.",
+        ),
+      );
+      return;
+    }
+
     if (!linkId) {
-      toast.error("Something went wrong. Please try again.");
+      toast.error(t("indexFile.genericError", "Something went wrong. Please try again."));
       return;
     }
 
@@ -74,7 +88,7 @@ export default function IndexFileDialog({
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to generate index");
+        throw new Error(errorData.error || t("indexFile.errorToast", "Failed to generate index"));
       }
       analytics.identify(viewerEmail);
       analytics.capture("Generated Index File by visitor", {
@@ -108,20 +122,33 @@ export default function IndexFileDialog({
         document.body.removeChild(link);
       }, 100);
 
-      toast.success("Index file generated successfully");
+      toast.success(t("indexFile.successToast", "Index file generated successfully"));
       setIsOpen(false);
     } catch (error) {
       console.error("Error generating index:", error);
       toast.error(
-        error instanceof Error ? error.message : "Failed to generate index",
+        error instanceof Error ? error.message : t("indexFile.errorToast", "Failed to generate index"),
       );
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleOpenChange = (open: boolean) => {
+    if (open && isPreview) {
+      toast.error(
+        t(
+          "indexFile.previewDisabled",
+          "Generating an index file isn't available in preview mode.",
+        ),
+      );
+      return;
+    }
+    setIsOpen(open);
+  };
+
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button
           variant="outline"
@@ -130,19 +157,19 @@ export default function IndexFileDialog({
           className={triggerClassName}
         >
           <FileSlidersIcon />
-          Generate Index File
+          {t("indexFile.trigger", "Generate Index File")}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Generate Dataroom Index File</DialogTitle>
-          <DialogDescription>
-            Select a format to generate the index file.
-          </DialogDescription>
+          <DialogTitle>{t("indexFile.title", "Generate Dataroom Index File")}</DialogTitle>
+          <DialogDescription>{t("indexFile.description", "Select a format to generate the index file.")}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="space-y-2">
-            <h4 className="text-sm font-medium">Select Format</h4>
+            <h4 className="text-sm font-medium">
+              {t("indexFile.selectFormat", "Select Format")}
+            </h4>
             <div className="grid grid-cols-2 gap-2">
               <Button
                 variant={selectedFormat === "excel" ? "default" : "outline"}
@@ -181,7 +208,7 @@ export default function IndexFileDialog({
             onClick={handleGenerateIndex}
             disabled={isLoading || disabled}
           >
-            {isLoading ? "Generating..." : "Generate"}
+            {isLoading ? t("indexFile.generating", "Generating...") : t("indexFile.generate", "Generate")}
           </Button>
         </DialogFooter>
       </DialogContent>

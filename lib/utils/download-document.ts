@@ -1,21 +1,12 @@
 /**
- * Trigger a document download from one of the link-scoped download
- * endpoints (`/api/links/download` or `/api/links/download/dataroom-document`).
+ * Trigger a document download from one of the link-scoped download endpoints.
  *
- * The server returns one of two response shapes:
- *
- *  1. A buffered binary response (currently only watermarked PDFs that need
- *     mupdf annotation) with `Content-Disposition` set to the desired
- *     filename. We turn it into a blob + `<a download>` to save it.
- *
- *  2. A JSON response of the form `{ downloadUrl, fileName }`. The URL is
- *     a CloudFront / S3 presigned URL with `response-content-disposition`
- *     baked in, so we just iframe-redirect to it. The browser streams the
- *     bytes straight from origin and saves the file with the right name -
- *     no proxying through the JS heap.
- *
- * `fallbackFileName` is used only when the buffered response is missing
- * its `Content-Disposition` header (shouldn't happen in practice).
+ * Handles two response shapes:
+ *  1. Buffered binary (watermarked PDFs) -> save as blob via `<a download>`.
+ *  2. JSON `{ downloadUrl }` -> hand to a hidden iframe. We can't use
+ *     `<a download>` here because the `download` attribute is ignored for
+ *     cross-origin URLs, which would turn the click into a top-level
+ *     navigation to the CloudFront URL.
  */
 export async function downloadFromLinkEndpoint({
   endpoint,
@@ -34,29 +25,23 @@ export async function downloadFromLinkEndpoint({
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || "Failed to download file");
+    throw new Error(
+      errorData.error || errorData.message || "Failed to download file",
+    );
   }
 
   const contentType = response.headers.get("content-type");
 
   if (contentType?.includes("application/json")) {
-    const { downloadUrl } = (await response.json()) as { downloadUrl: string };
+    const { downloadUrl } = (await response.json()) as {
+      downloadUrl: string;
+      fileName?: string;
+    };
 
-    const iframe = window.document.createElement("iframe");
-    iframe.style.display = "none";
-    window.document.body.appendChild(iframe);
-    iframe.src = downloadUrl;
-
-    setTimeout(() => {
-      if (iframe.parentNode) {
-        window.document.body.removeChild(iframe);
-      }
-    }, 5000);
-
+    triggerDownloadFromUrl(downloadUrl);
     return;
   }
 
-  // Buffered binary response (e.g. watermarked PDF).
   const blob = await response.blob();
   const objectUrl = window.URL.createObjectURL(blob);
 
@@ -79,11 +64,19 @@ export async function downloadFromLinkEndpoint({
   }, 100);
 }
 
-/**
- * Parse a `Content-Disposition` header. Prefers RFC 5987's
- * `filename*=UTF-8''<encoded>` form so unicode filenames survive, and falls
- * back to the legacy quoted-string `filename="..."` form.
- */
+function triggerDownloadFromUrl(url: string): void {
+  const iframe = window.document.createElement("iframe");
+  iframe.style.display = "none";
+  window.document.body.appendChild(iframe);
+  iframe.src = url;
+
+  setTimeout(() => {
+    if (iframe.parentNode) {
+      window.document.body.removeChild(iframe);
+    }
+  }, 5000);
+}
+
 export function extractFilenameFromContentDisposition(
   disposition: string | null,
 ): string | null {

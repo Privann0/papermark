@@ -8,6 +8,7 @@ import { PlanEnum } from "@/ee/stripe/constants";
 import { FilterIcon, PlusIcon } from "lucide-react";
 import { useQueryState } from "nuqs";
 
+import { useSelfMembership } from "@/lib/hooks/use-self-membership";
 import { usePlan } from "@/lib/swr/use-billing";
 import useDatarooms from "@/lib/swr/use-datarooms";
 import useLimits from "@/lib/swr/use-limits";
@@ -40,6 +41,9 @@ export default function DataroomsPage() {
   const { limits } = useLimits();
   const router = useRouter();
 
+  // Dataroom-scoped members cannot create datarooms; hide the creation controls.
+  const { isDataroomMember } = useSelfMembership();
+
   const [tagsFilter, setTagsFilter] = useQueryState<string[]>("tags", {
     parse: (value: string) => value.split(",").filter(Boolean),
     serialize: (value: string[]) => value.join(","),
@@ -68,25 +72,32 @@ export default function DataroomsPage() {
     return a.name.localeCompare(b.name);
   });
 
-  // Filter out only dataroom tags
-  const dataroomTags = useMemo(() => {
-    if (!availableTags) return [];
-    return availableTags;
-  }, [availableTags]);
-
-  const tagOptions = useMemo(() => {
-    return (
-      dataroomTags?.map((tag) => ({
-        value: tag.name,
-        label: tag.name,
-        meta: { color: tag.color, description: tag.description },
-      })) || []
-    );
-  }, [dataroomTags]);
-
   const selectedTagValues = useMemo(() => {
     return tagsFilter || [];
   }, [tagsFilter]);
+
+  // Only surface tags that are actually applied to a dataroom the user can see.
+  // Team tags that aren't attached to any visible dataroom would never match a
+  // filter, so showing them is just noise (and leaks unrelated tags to
+  // dataroom-scoped members). Selected tags are always kept so an active filter
+  // doesn't vanish when it narrows the result set.
+  const visibleTagNames = useMemo(() => {
+    const names = new Set<string>(selectedTagValues);
+    (datarooms ?? []).forEach((dataroom) => {
+      dataroom.tags?.forEach((tagItem) => names.add(tagItem.tag.name));
+    });
+    return names;
+  }, [datarooms, selectedTagValues]);
+
+  const tagOptions = useMemo(() => {
+    return (availableTags ?? [])
+      .filter((tag) => visibleTagNames.has(tag.name))
+      .map((tag) => ({
+        value: tag.name,
+        label: tag.name,
+        meta: { color: tag.color, description: tag.description },
+      }));
+  }, [availableTags, visibleTagNames]);
 
   const hasActiveFilters = searchQuery || tagsFilter?.length;
 
@@ -107,7 +118,8 @@ export default function DataroomsPage() {
             </p>
           </div>
           <div className="flex items-center gap-x-1">
-            {isBusiness && !canCreateUnlimitedDatarooms ? (
+            {isDataroomMember ? null : isBusiness &&
+              !canCreateUnlimitedDatarooms ? (
               <UpgradePlanModal
                 clickedPlan={PlanEnum.DataRooms}
                 trigger="datarooms"
@@ -116,7 +128,9 @@ export default function DataroomsPage() {
                   className="group flex flex-1 items-center justify-start gap-x-1 whitespace-nowrap px-2 text-left sm:gap-x-3 sm:px-3"
                   title="Upgrade to Add Data Room"
                 >
-                  <span className="text-xs sm:text-sm">Upgrade to Add Data Room</span>
+                  <span className="text-xs sm:text-sm">
+                    Upgrade to Add Data Room
+                  </span>
                 </Button>
               </UpgradePlanModal>
             ) : isTrial &&
@@ -153,7 +167,10 @@ export default function DataroomsPage() {
                       className="group flex flex-1 items-center justify-start gap-x-1 whitespace-nowrap px-2 text-left sm:gap-x-3 sm:px-3"
                       title="Create New Dataroom"
                     >
-                      <PlusIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
+                      <PlusIcon
+                        className="h-5 w-5 shrink-0"
+                        aria-hidden="true"
+                      />
                       <span className="text-xs sm:text-sm">New Dataroom</span>
                     </Button>
                   </AddDataroomModal>

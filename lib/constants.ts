@@ -65,6 +65,10 @@ export const LIMITS = {
   views: 20,
 };
 
+// Lives here rather than next to the sanitizer so client components can read
+// the limit without pulling `sanitize-html` into the browser/SSR bundle.
+export const MAX_MESSAGE_LENGTH = 4000;
+
 export const SUPPORTED_DOCUMENT_MIME_TYPES = [
   "application/pdf", // .pdf
   "application/vnd.ms-excel", // .xls
@@ -101,6 +105,7 @@ export const SUPPORTED_DOCUMENT_MIME_TYPES = [
   "image/png", // .png
   "image/jpeg", // .jpeg
   "image/jpg", // .jpg
+  "image/gif", // .gif (also: animated overlays extracted from .pptx slides)
   "application/zip", // .zip
   "application/x-zip-compressed", // .zip
   "application/vnd.rar", // .rar
@@ -122,7 +127,13 @@ export const SUPPORTED_DOCUMENT_MIME_TYPES = [
   "application/vnd.google-earth.kmz", // .kmz
   "application/vnd.ms-outlook", // .msg
   "message/rfc822", // .eml
+  "text/html", // .html, .htm
 ];
+
+// Merged into the dropzone accept map only when the `htmlDocuments` flag is on.
+export const HTML_ACCEPTED_FILE_TYPES = {
+  "text/html": [".html", ".htm"],
+};
 
 // Upload configurations for different plan types and contexts
 export const FREE_PLAN_ACCEPTED_FILE_TYPES = {
@@ -157,6 +168,7 @@ export const FULL_PLAN_ACCEPTED_FILE_TYPES = {
   "application/rtf": [], // ".rtf"
   "text/rtf": [], // ".rtf"
   "text/plain": [".txt", ".log", ".err", ".prj", ".jgw", ".cpg"], // ".txt", ".log", ".err", ".prj", ".jgw", ".cpg"
+  "text/markdown": [".md", ".markdown"], // ".md", ".markdown"
   "image/vnd.dwg": [".dwg"], // ".dwg"
   "image/vnd.dxf": [".dxf"], // ".dxf"
   "image/tiff": [".tif", ".tiff"], // ".tif", ".tiff"
@@ -216,6 +228,7 @@ export const VIEWER_ACCEPTED_FILE_TYPES = {
   "application/rtf": [], // ".rtf"
   "text/rtf": [], // ".rtf"
   "text/plain": [".txt", ".log", ".err", ".prj", ".jgw", ".cpg"], // ".txt", ".log", ".err", ".prj", ".jgw", ".cpg"
+  "text/markdown": [".md", ".markdown"], // ".md", ".markdown"
   "image/tiff": [".tif", ".tiff"], // ".tif", ".tiff"
   "image/x-ecw": [".ecw"], // ".ecw"
   "application/x-bak": [".bak"], // ".bak"
@@ -254,6 +267,7 @@ export const SUPPORTED_DOCUMENT_SIMPLE_TYPES = [
   "video",
   "map",
   "email",
+  "html",
   "other",
 ] as const;
 

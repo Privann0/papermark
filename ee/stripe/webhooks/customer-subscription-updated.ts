@@ -8,6 +8,7 @@ import {
   DATAROOMS_UNLIMITED_PLAN_LIMITS,
   PRO_PLAN_LIMITS,
 } from "@/ee/limits/constants";
+import { getSubscriptionPeriod } from "@/ee/stripe/compat";
 import Stripe from "stripe";
 
 import { clearTeamDomainRedirects } from "@/lib/api/domains/clear-team-redirects";
@@ -23,7 +24,17 @@ export async function customerSubsciptionUpdated(
   isOldAccount: boolean = false,
 ) {
   const subscriptionUpdated = event.data.object as Stripe.Subscription;
-  const priceId = subscriptionUpdated.items.data[0].price.id;
+  const subscriptionItem = subscriptionUpdated.items.data[0];
+
+  if (!subscriptionItem) {
+    await log({
+      message: `Stripe subscription ${subscriptionUpdated.id} has no subscription item`,
+      type: "error",
+    });
+    return res.status(200).json({ received: true });
+  }
+
+  const priceId = subscriptionItem.price.id;
 
   const plan = getPlanFromPriceId(priceId, isOldAccount);
 
@@ -52,11 +63,12 @@ export async function customerSubsciptionUpdated(
     return res.status(200).json({ received: true });
   }
 
+  const period = getSubscriptionPeriod(subscriptionUpdated);
   const newPlan = plan.slug;
   const subscriptionId = subscriptionUpdated.id;
-  const startsAt = new Date(subscriptionUpdated.current_period_start * 1000);
-  const endsAt = new Date(subscriptionUpdated.current_period_end * 1000);
-  const quantity = subscriptionUpdated.items.data[0].quantity;
+  const startsAt = new Date(period.start * 1000);
+  const endsAt = new Date(period.end * 1000);
+  const quantity = subscriptionItem.quantity;
 
   let teamPlan = team.plan;
   if (isOldAccount) {
@@ -72,7 +84,8 @@ export async function customerSubsciptionUpdated(
       | typeof DATAROOMS_PLAN_LIMITS
       | typeof DATAROOMS_PLUS_PLAN_LIMITS
       | typeof DATAROOMS_PREMIUM_PLAN_LIMITS
-      | typeof DATAROOMS_UNLIMITED_PLAN_LIMITS = structuredClone(PRO_PLAN_LIMITS);
+      | typeof DATAROOMS_UNLIMITED_PLAN_LIMITS =
+      structuredClone(PRO_PLAN_LIMITS);
     if (plan.slug === "pro") {
       planLimits = structuredClone(PRO_PLAN_LIMITS);
     } else if (plan.slug === "business") {

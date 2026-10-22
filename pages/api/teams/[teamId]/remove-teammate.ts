@@ -80,6 +80,14 @@ export default async function handle(
           },
         }),
         revokeUserBoundTeamTokens(userToBeDeleted, teamId),
+        // remove any dataroom-scoped assignments for this user in this team
+        // (UserDataroom has no FK to UserTeam, so it isn't covered by cascade)
+        prisma.userDataroom.deleteMany({
+          where: {
+            userId: userToBeDeleted,
+            teamId,
+          },
+        }),
         // delete the user from the team
         prisma.userTeam.delete({
           where: {

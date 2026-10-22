@@ -16,6 +16,7 @@ export function getSupportedContentType(contentType: string): string | null {
     case "application/rtf":
     case "text/rtf":
     case "text/plain":
+    case "text/markdown":
       return "docs";
     case "application/vnd.ms-powerpoint":
     case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
@@ -61,6 +62,8 @@ export function getSupportedContentType(contentType: string): string | null {
     case "application/vnd.ms-outlook":
     case "message/rfc822":
       return "email";
+    case "text/html":
+      return "html";
     case "image/tiff":
     case "image/x-ecw":
     case "application/x-bak":
@@ -69,6 +72,33 @@ export function getSupportedContentType(contentType: string): string | null {
     default:
       return null;
   }
+}
+
+// Checks the extension too because browsers often upload `.md` as `text/plain`.
+export function isMarkdownFile({
+  name,
+  contentType,
+}: {
+  name?: string | null;
+  contentType?: string | null;
+}): boolean {
+  if (contentType === "text/markdown") return true;
+  if (name && /\.(md|markdown|mdown|mkd|mdx)$/i.test(name)) return true;
+  return false;
+}
+
+// Checks the extension too because browsers often upload `.html` with an empty
+// or generic content type.
+export function isHtmlFile({
+  name,
+  contentType,
+}: {
+  name?: string | null;
+  contentType?: string | null;
+}): boolean {
+  if (contentType === "text/html") return true;
+  if (name && /\.html?$/i.test(name)) return true;
+  return false;
 }
 
 export function getExtensionFromContentType(
@@ -111,6 +141,8 @@ export function getExtensionFromContentType(
       return "rtf";
     case "text/plain":
       return "txt";
+    case "text/markdown":
+      return "md";
     case "image/vnd.dwg":
       return "dwg";
     case "image/vnd.dxf":
@@ -145,6 +177,8 @@ export function getExtensionFromContentType(
       return "msg";
     case "message/rfc822":
       return "eml";
+    case "text/html":
+      return "html";
     case "image/tiff":
       return "tiff";
     case "image/x-ecw":

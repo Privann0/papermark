@@ -1,6 +1,12 @@
 import { NextApiResponse } from "next";
 
 import { sendSubscriptionRenewalReminderEmail } from "@/ee/features/billing/renewal-reminder/lib/send-subscription-renewal-reminder";
+import { stripeInstance } from "@/ee/stripe";
+import {
+  getInvoiceLinePriceId,
+  getLegacyInvoiceLinePrice,
+  isYearlyRecurringPrice,
+} from "@/ee/stripe/compat";
 import Stripe from "stripe";
 
 import { log } from "@/lib/utils";
@@ -22,17 +28,32 @@ export async function invoiceUpcoming(
     return res.status(200).json({ received: true });
   }
 
-  // Check if this is a yearly subscription
-  const hasYearlyPlan = lineItems.some((item) => {
-    if (item.price && item.price.recurring) {
-      return (
-        item.price.recurring.interval === "year" ||
-        (item.price.recurring.interval === "month" &&
-          item.price.recurring.interval_count === 12)
-      );
-    }
-    return false;
+  // Check if this is a yearly subscription. Legacy webhook payloads expose
+  // line.price directly; modern Stripe API versions expose only the price ID
+  // under line.pricing.price_details, so retrieve those prices when needed.
+  let hasYearlyPlan = lineItems.some((item) => {
+    const legacyPrice = getLegacyInvoiceLinePrice(item);
+    return legacyPrice ? isYearlyRecurringPrice(legacyPrice) : false;
   });
+
+  if (!hasYearlyPlan) {
+    const priceIds = Array.from(
+      new Set(
+        lineItems
+          .map(getInvoiceLinePriceId)
+          .filter((priceId): priceId is string => Boolean(priceId)),
+      ),
+    );
+
+    if (priceIds.length > 0) {
+      const stripe = stripeInstance(isOldAccount);
+      const prices = await Promise.all(
+        priceIds.map((priceId) => stripe.prices.retrieve(priceId)),
+      );
+
+      hasYearlyPlan = prices.some(isYearlyRecurringPrice);
+    }
+  }
 
   if (!hasYearlyPlan) {
     await log({

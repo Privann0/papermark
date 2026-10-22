@@ -1,6 +1,8 @@
 import { BadgeInfoIcon, Download } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
+import { determineTextColor } from "@/lib/utils/determine-text-color";
 
 import { ButtonTooltip } from "@/components/ui/tooltip";
 import {
@@ -35,6 +37,7 @@ export function DataroomTrailingActions({
   allowDownload,
   allowBulkDownload,
   viewerEmail,
+  isPreview,
   onToggleConversations,
   onOpenDownload,
 }: {
@@ -50,9 +53,11 @@ export function DataroomTrailingActions({
   allowDownload?: boolean;
   allowBulkDownload?: boolean;
   viewerEmail?: string | null;
+  isPreview?: boolean;
   onToggleConversations: () => void;
   onOpenDownload: () => void;
 }) {
+  const { t } = useTranslation("dataroom");
   const showNavCta = !!brand?.ctaLabel && !!brand?.ctaUrl;
 
   // "onLight" picks up the surface-aware viewer CSS vars so the button blends
@@ -76,8 +81,7 @@ export function DataroomTrailingActions({
             </TooltipTrigger>
             <TooltipContent>
               <p className="max-w-xs text-wrap text-center">
-                Skipped verification because you are a team member; no analytics
-                will be collected
+                {t("trailingActions.teamMemberTooltip", "Skipped verification because you are a team member; no analytics will be collected")}
               </p>
             </TooltipContent>
           </Tooltip>
@@ -88,11 +92,13 @@ export function DataroomTrailingActions({
           href={brand!.ctaUrl!}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"
+          className="inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors hover:opacity-90"
           style={{
             backgroundColor:
               brand?.accentButtonColor || brand?.brandColor || "#111827",
-            color: "#ffffff",
+            color: determineTextColor(
+              brand?.accentButtonColor || brand?.brandColor || "#111827",
+            ),
           }}
         >
           {brand!.ctaLabel}
@@ -109,11 +115,11 @@ export function DataroomTrailingActions({
               "bg-gray-900 text-white hover:bg-gray-900/90",
           )}
         >
-          View Q&A
+          {t("trailingActions.viewQA", "View Q&A")}
         </Button>
       )}
-      {allowDownload && allowBulkDownload && viewerEmail ? (
-        <ButtonTooltip content="Download Dataroom">
+      {allowDownload && allowBulkDownload && (viewerEmail || isPreview) ? (
+        <ButtonTooltip content={t("trailingActions.downloadDataroom", "Download Dataroom")}>
           <Button
             onClick={onOpenDownload}
             className={cn("m-1 size-9 sm:size-10", chip)}

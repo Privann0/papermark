@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { View } from "@prisma/client";
 import { getServerSession } from "next-auth/next";
 
+import { enforceDataroomMemberScope } from "@/lib/api/rbac/guard";
 import { errorhandler } from "@/lib/errorHandler";
 import prisma from "@/lib/prisma";
 import { getTotalDataroomDuration } from "@/lib/tinybird";
@@ -36,6 +37,11 @@ export default async function handle(
     };
 
     const userId = (session.user as CustomUser).id;
+
+    // Scoped members may only read stats for their assigned rooms.
+    if (await enforceDataroomMemberScope({ userId, teamId, dataroomId, res })) {
+      return;
+    }
 
     try {
       // Check if the user is part of the team

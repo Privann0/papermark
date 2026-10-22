@@ -7,6 +7,7 @@ import { authOptions } from "@/lib/auth/auth-options";
 import { verifyDataroomSession } from "@/lib/auth/dataroom-auth";
 import { verifyPreviewSession } from "@/lib/auth/preview-auth";
 import { getFile } from "@/lib/files/get-file";
+import { signPageLinks } from "@/lib/files/sign-page-links";
 import prisma from "@/lib/prisma";
 import { ratelimit } from "@/lib/redis";
 import { CustomUser } from "@/lib/types";
@@ -153,6 +154,7 @@ export async function POST(request: NextRequest) {
           id: true,
           documentId: true,
           dataroomId: true,
+          dataroomViewId: true,
           linkId: true,
           viewedAt: true,
           viewerId: true,
@@ -205,15 +207,16 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Bind the requested viewId to the caller's session. Cross-view
-      // access (re-opening a doc within the same dataroom session creates
-      // a new DOCUMENT_VIEW row) requires both viewerIds to be defined and
-      // equal — anonymous views must match by viewId only.
+      // A DOCUMENT_VIEW's `dataroomViewId` points to the session's
+      // DATAROOM_VIEW (`session.viewId`); viewer-id match is a legacy fallback.
+      const belongsToSessionView =
+        session.viewId === view.id ||
+        (!!view.dataroomViewId && view.dataroomViewId === session.viewId);
       const sameViewer =
         !!session.viewerId &&
         !!view.viewerId &&
         session.viewerId === view.viewerId;
-      if (session.viewId !== view.id && !sameViewer) {
+      if (!belongsToSessionView && !sameViewer) {
         return NextResponse.json(
           { message: "Unauthorized access." },
           { status: 403 },
@@ -247,15 +250,21 @@ async function fetchAndReturnPages(
       file: true,
       storageType: true,
       pageNumber: true,
+      pageLinks: true,
     },
   });
 
   const pagesWithUrls = await Promise.all(
     documentPages.map(async (page) => {
-      const { storageType, ...otherPage } = page;
+      const { storageType, pageLinks } = page;
+      // Re-sign overlay URLs alongside the page-image URL — they share the
+      // same TTL and the viewer needs both refreshed when it lazy-loads a
+      // page outside the initial window.
+      const signedLinks = await signPageLinks(pageLinks);
       return {
-        pageNumber: otherPage.pageNumber,
+        pageNumber: page.pageNumber,
         file: await getFile({ data: page.file, type: storageType }),
+        ...(signedLinks ? { pageLinks: signedLinks } : {}),
       };
     }),
   );

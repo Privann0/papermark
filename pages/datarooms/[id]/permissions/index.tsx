@@ -1,6 +1,8 @@
+import { useRouter } from "next/router";
+
 import dynamic from "next/dynamic";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { InviteViewersModal } from "@/ee/features/dataroom-invitations/components/invite-viewers-modal";
 import {
@@ -37,15 +39,35 @@ const BulkImportLinksModal = dynamic(
 );
 
 export default function DataroomLinksPage() {
+  const router = useRouter();
   const { dataroom } = useDataroom();
-  const { links } = useDataroomLinks();
-  const { isDatarooms, isDataroomsPlus } = usePlan();
+  const { links, loading: linksLoading } = useDataroomLinks();
+  const { isDatarooms, isDataroomsPlus, isTrial } = usePlan();
   const { isFeatureEnabled } = useFeatureFlags();
   const canInviteViewers =
-    isDataroomsPlus || (isDatarooms && isFeatureEnabled("dataroomInvitations"));
+    isDataroomsPlus ||
+    ((isDatarooms || isTrial) && isFeatureEnabled("dataroomInvitations"));
   const [isLinkSheetOpen, setIsLinkSheetOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
+
+  // First-time experience: when the data room has no links yet, auto-open the
+  // link sheet. With no existing links it opens with both panels (link access
+  // controls + granular file permissions) side by side; once a link exists it
+  // opens showing just the link settings. Guard with a ref so it only opens
+  // once per visit and never reopens after the user closes it.
+  const didAutoOpenRef = useRef(false);
+  useEffect(() => {
+    if (
+      !didAutoOpenRef.current &&
+      !linksLoading &&
+      links &&
+      links.length === 0
+    ) {
+      didAutoOpenRef.current = true;
+      setIsLinkSheetOpen(true);
+    }
+  }, [linksLoading, links]);
 
   if (!dataroom) {
     return <div>Loading...</div>;
@@ -57,7 +79,7 @@ export default function DataroomLinksPage() {
         <div className="flex items-start justify-between">
           <div className="space-y-1">
             <h3 className="text-2xl font-semibold tracking-tight text-foreground">
-              Links
+              Access links
             </h3>
             <p className="flex flex-row items-center gap-2 text-sm text-muted-foreground">
               Share your data room with access controls.
@@ -72,15 +94,13 @@ export default function DataroomLinksPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {!canInviteViewers && (
-              <Button
-                variant="outline"
-                onClick={() => setIsInviteModalOpen(true)}
-              >
-                <SendIcon className="h-4 w-4" />
-                Invite via email
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              onClick={() => setIsInviteModalOpen(true)}
+            >
+              <SendIcon className="h-4 w-4" />
+              Invite via email
+            </Button>
             <Button onClick={() => setIsLinkSheetOpen(true)}>
               <PlusIcon className="h-4 w-4" />
               Create link
@@ -108,7 +128,7 @@ export default function DataroomLinksPage() {
         <TabMenu
           navigation={[
             {
-              label: "Links",
+              label: "Access links",
               href: `/datarooms/${dataroom.id}/permissions`,
               value: "links",
               currentValue: "links",
@@ -146,15 +166,14 @@ export default function DataroomLinksPage() {
         targetId={dataroom.id}
       />
 
-      {!canInviteViewers && (
-        <InviteViewersModal
-          open={isInviteModalOpen}
-          setOpen={setIsInviteModalOpen}
-          dataroomId={dataroom.id}
-          dataroomName={dataroom.name}
-          canSend={false}
-        />
-      )}
+      <InviteViewersModal
+        open={isInviteModalOpen}
+        setOpen={setIsInviteModalOpen}
+        dataroomId={dataroom.id}
+        dataroomName={dataroom.name}
+        canSend={canInviteViewers}
+        onSuccess={() => router.push(`/datarooms/${dataroom.id}/participants`)}
+      />
     </AppLayout>
   );
 }

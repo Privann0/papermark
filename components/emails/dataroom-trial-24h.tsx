@@ -31,7 +31,7 @@ const DataroomTrial24hReminderEmail = ({ name }: TrialEndReminderEmail) => {
             <Text className="mx-0 mb-8 mt-4 p-0 text-center text-2xl font-normal">
               <span className="font-bold tracking-tighter">Papermark</span>
             </Text>
-            <Text className="font-seminbold mx-0 mb-8 mt-4 p-0 text-center text-xl">
+            <Text className="mx-0 mb-8 mt-4 p-0 text-center text-xl">
               Your Data Room Plus plan trial expires in 24 hours
             </Text>
             <Text className="text-sm leading-6 text-black">

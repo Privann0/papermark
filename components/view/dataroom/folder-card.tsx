@@ -5,10 +5,13 @@ import { DataroomFolder } from "@prisma/client";
 import { Download, MoreVerticalIcon } from "lucide-react";
 
 import { type DataroomCardLayout } from "@/ee/features/branding/lib/dataroom-viewer-layout";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { getFolderColorClasses, getFolderIcon } from "@/lib/constants/folder-constants";
-import { cn, timeAgo } from "@/lib/utils";
+import { timeAgoLocalized } from "@/lib/i18n/format";
+import { asSupportedLocale, DEFAULT_LOCALE } from "@/lib/i18n/locales";
+import { cn } from "@/lib/utils";
 import { HIERARCHICAL_DISPLAY_STYLE } from "@/lib/utils/hierarchical-display";
 
 import { Button } from "@/components/ui/button";
@@ -61,6 +64,8 @@ export default function FolderCard({
 }: FolderCardProps) {
   const [open, setOpen] = useState(false);
   const { palette } = useViewerSurfaceTheme();
+  const { t, i18n } = useTranslation("dataroom");
+  const activeLocale = asSupportedLocale(i18n.language) ?? DEFAULT_LOCALE;
 
   const plainTitle =
     layout === "COMPACT" || (layout === "LIST" && editorialList);
@@ -91,11 +96,11 @@ export default function FolderCard({
     );
   const openFolderDownloadModal = () => {
     if (!allowDownload) {
-      toast.error("Downloading folders is not allowed.");
+      toast.error(t("navToasts.foldersNotAllowed", "Downloading folders is not allowed."));
       return;
     }
     if (isPreview) {
-      toast.error("You cannot download dataroom folders in preview mode.");
+      toast.error(t("navToasts.cannotDownloadFolderPreview", "You cannot download dataroom folders in preview mode."));
       return;
     }
 
@@ -133,13 +138,13 @@ export default function FolderCard({
             "text-[var(--viewer-control-icon)] border-[var(--viewer-control-border)] hover:bg-[var(--viewer-control-bg)]",
             "group-hover/row:text-[var(--viewer-text)] group-hover/row:border-[var(--viewer-control-border-strong)]",
           )}
-          aria-label="Open menu"
+          aria-label={t("cards.openMenu", "Open menu")}
         >
           <MoreVerticalIcon className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Actions</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("cards.actionsLabel", "Actions")}</DropdownMenuLabel>
         <DropdownMenuItem
           onClick={(e) => {
             e.preventDefault();
@@ -150,7 +155,7 @@ export default function FolderCard({
           disabled={isPreview}
         >
           <Download className="h-4 w-4" />
-          Download
+          {t("cards.download", "Download")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -177,7 +182,7 @@ export default function FolderCard({
         <button
           onClick={() => setFolderId(folder.id)}
           className="absolute inset-0 z-0 cursor-pointer"
-          aria-label={`Open folder ${folder.name}`}
+          aria-label={t("cards.openFolder", "Open folder {{name}}", { name: folder.name })}
         />
         <div className="pointer-events-none relative flex min-w-0 flex-1 items-center gap-2">
           {!hideFolderIcons && colorClasses ? (
@@ -195,7 +200,9 @@ export default function FolderCard({
             </h2>
             {showLastUpdated && (
               <p className="truncate text-xs leading-4 text-[var(--viewer-muted-text)]">
-                Updated {timeAgo(folder.updatedAt)}
+                {t("cards.updated", "Updated {{when}}", {
+                  when: timeAgoLocalized(folder.updatedAt, activeLocale),
+                })}
               </p>
             )}
           </div>
@@ -264,7 +271,9 @@ export default function FolderCard({
           type="button"
           onClick={() => setFolderId(folder.id)}
           className="absolute inset-0 z-0 cursor-pointer rounded-none border-0 bg-transparent p-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--viewer-control-border-strong)]"
-          aria-label={`Open folder ${compactShowIndexColumn ? `${indexLabel} ` : ""}${folder.name}`}
+          aria-label={t("cards.openFolder", {
+            name: `${compactShowIndexColumn ? `${indexLabel} ` : ""}${folder.name}`,
+          })}
         />
         <div className="pointer-events-none relative z-[1] flex items-center justify-between gap-3 sm:hidden">
           {compactShowIndexColumn ? (
@@ -276,7 +285,7 @@ export default function FolderCard({
           <div className="flex shrink-0 items-center gap-2">
             {showUpdatedCell ? (
               <p className="max-w-[38vw] truncate text-xs tabular-nums text-[var(--viewer-muted-text)]">
-                {timeAgo(folder.updatedAt)}
+                {timeAgoLocalized(folder.updatedAt, activeLocale)}
               </p>
             ) : null}
             {compactShowActionsColumn && downloadMenuButton ? (
@@ -298,7 +307,7 @@ export default function FolderCard({
           <div className="flex min-w-0 items-center gap-3">{nameBlock}</div>
           {showUpdatedCell ? (
             <p className="truncate text-right text-xs tabular-nums text-[var(--viewer-muted-text)]">
-              {timeAgo(folder.updatedAt)}
+              {timeAgoLocalized(folder.updatedAt, activeLocale)}
             </p>
           ) : null}
           {actionsSlot}
@@ -312,7 +321,9 @@ export default function FolderCard({
       folder.hierarchicalIndex?.trim() ||
       String(editorialIndex + 1).padStart(2, "0");
     const updatedLabel = showLastUpdated
-      ? `Updated ${timeAgo(folder.updatedAt)}`
+      ? t("cards.updated", "Updated {{when}}", {
+          when: timeAgoLocalized(folder.updatedAt, activeLocale),
+        })
       : null;
 
     return (
@@ -328,7 +339,7 @@ export default function FolderCard({
         <button
           onClick={() => setFolderId(folder.id)}
           className="absolute inset-0 z-0 cursor-pointer"
-          aria-label={`Open folder ${folder.name}`}
+          aria-label={t("cards.openFolder", "Open folder {{name}}", { name: folder.name })}
         />
         <div className="pointer-events-none relative z-[1] flex flex-col gap-2 md:hidden">
           <div className="flex items-start justify-between gap-3 pl-7">
@@ -343,12 +354,12 @@ export default function FolderCard({
                 {displayNameNode}
               </h2>
               <p className="mt-1 text-xs text-[var(--viewer-muted-text)]">
-                Folder
+                {t("cards.folder", "Folder")}
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1 text-[11px] text-[var(--viewer-muted-text)]">
               {updatedLabel ? <span>{updatedLabel}</span> : null}
-              <span className="font-medium">FOLDER</span>
+              <span className="font-medium">{t("cards.folderBadge", "FOLDER")}</span>
             </div>
           </div>
           {downloadMenuButton ? (
@@ -370,14 +381,14 @@ export default function FolderCard({
               {displayNameNode}
             </h2>
             <p className="mt-0.5 truncate text-xs text-[var(--viewer-muted-text)]">
-              Folder
+              {t("cards.folder", "Folder")}
             </p>
           </div>
           <span className="truncate text-right text-xs tabular-nums text-[var(--viewer-muted-text)]">
             {updatedLabel ?? "—"}
           </span>
           <span className="text-center text-[11px] font-medium uppercase tracking-wide text-[var(--viewer-muted-text)]">
-            FOLDER
+            {t("cards.folderBadge", "FOLDER")}
           </span>
           <div className="pointer-events-auto flex justify-end">
             {downloadMenuButton ?? (
@@ -424,7 +435,11 @@ export default function FolderCard({
           </div>
           {showLastUpdated && (
             <div className="mt-1 flex items-center space-x-1 text-xs leading-5 text-[var(--viewer-muted-text)]">
-              <p className="truncate">Updated {timeAgo(folder.updatedAt)}</p>
+              <p className="truncate">
+                {t("cards.updated", "Updated {{when}}", {
+                  when: timeAgoLocalized(folder.updatedAt, activeLocale),
+                })}
+              </p>
             </div>
           )}
         </div>

@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 
 import { getServerSession } from "next-auth/next";
 
+import { enforceDataroomMemberScope } from "@/lib/api/rbac/guard";
 import { errorhandler } from "@/lib/errorHandler";
 import prisma from "@/lib/prisma";
 import { CustomUser, LinkWithViews } from "@/lib/types";
@@ -26,6 +27,11 @@ export default async function handle(
     };
 
     const userId = (session.user as CustomUser).id;
+
+    // Scoped members may only read links for their assigned rooms.
+    if (await enforceDataroomMemberScope({ userId, teamId, dataroomId, res })) {
+      return;
+    }
 
     try {
       // Check if the user is part of the team
@@ -67,6 +73,9 @@ export default async function handle(
           customFields: true,
           visitorGroups: {
             select: { visitorGroupId: true },
+          },
+          dataroom: {
+            select: { brandId: true },
           },
           _count: {
             select: { views: { where: { viewType: "DATAROOM_VIEW" } } },

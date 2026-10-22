@@ -46,6 +46,7 @@ const TEMPLATE_HEADERS = [
   "allowDownload",
   "enableNotification",
   "enableScreenshotProtection",
+  "enableConfidentialView",
   "showBanner",
   "allowList",
   "denyList",
@@ -80,6 +81,7 @@ type LinkPayload = {
   allowDownload?: boolean;
   enableNotification?: boolean;
   enableScreenshotProtection?: boolean;
+  enableConfidentialView?: boolean;
   showBanner?: boolean;
   allowList?: string[];
   denyList?: string[];
@@ -106,6 +108,7 @@ const BOOLEAN_FIELDS: Array<keyof LinkPayload> = [
   "allowDownload",
   "enableNotification",
   "enableScreenshotProtection",
+  "enableConfidentialView",
   "showBanner",
 ];
 

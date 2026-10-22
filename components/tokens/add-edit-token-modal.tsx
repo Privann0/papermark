@@ -8,12 +8,15 @@ import {
 } from "react";
 
 import { useTeam } from "@/context/team-context";
+import { PlanEnum } from "@/ee/stripe/constants";
 import { CircleHelpIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { usePlan } from "@/lib/swr/use-billing";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
+import { UpgradeButton } from "@/components/ui/upgrade-button";
 import {
   Dialog,
   DialogContent,
@@ -62,6 +65,8 @@ function AddEditTokenModal({
   const teamInfo = useTeam();
   const teamId = teamInfo?.currentTeam?.id;
   const isEdit = Boolean(token);
+  const { isFree, isPro, isTrial } = usePlan();
+  const showUpgrade = (isFree || isPro) && !isTrial;
 
   const initial = useMemo(
     () =>
@@ -106,6 +111,7 @@ function AddEditTokenModal({
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (showUpgrade) return;
     if (preset === "restricted" && scopesList.length === 0) {
       toast.error("Select at least one resource permission");
       return;
@@ -318,14 +324,26 @@ function AddEditTokenModal({
             </div>
           ) : null}
 
-          <Button
-            type="submit"
-            disabled={submitDisabled}
-            loading={isLoading}
-            className="w-full bg-gray-900 text-gray-50 hover:bg-gray-900/90"
-          >
-            {isEdit ? "Save changes" : "Create API key"}
-          </Button>
+          {showUpgrade ? (
+            <UpgradeButton
+              text="Business"
+              customText="Upgrade to save API Key"
+              clickedPlan={PlanEnum.Business}
+              trigger="create_token"
+              highlightItem={["api"]}
+              className="w-full justify-center"
+              key="create-token"
+            />
+          ) : (
+            <Button
+              type="submit"
+              disabled={submitDisabled}
+              loading={isLoading}
+              className="w-full bg-gray-900 text-gray-50 hover:bg-gray-900/90"
+            >
+              {isEdit ? "Save changes" : "Create API key"}
+            </Button>
+          )}
         </form>
       </DialogContent>
     </Dialog>

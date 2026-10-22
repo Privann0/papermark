@@ -126,6 +126,8 @@ interface MultiSelectProps<
   setIsPopoverOpen: React.Dispatch<React.SetStateAction<boolean>>;
   loading?: boolean;
   triggerIcon?: React.ReactNode;
+  /** Optional content rendered as a pinned footer inside the dropdown. */
+  footer?: React.ReactNode;
 }
 
 export type ComboboxOption<
@@ -165,6 +167,7 @@ export const MultiSelect = React.forwardRef<
       isPopoverOpen,
       loading,
       triggerIcon,
+      footer,
       ...props
     },
     ref,
@@ -374,6 +377,9 @@ export const MultiSelect = React.forwardRef<
               </CommandList>
             </ScrollArea>
           </Command>
+          {footer ? (
+            <div className="border-t border-border p-1">{footer}</div>
+          ) : null}
         </PopoverContent>
         {animation > 0 && value.length > 0 && (
           <WandSparkles

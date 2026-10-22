@@ -398,13 +398,13 @@ export default function DataroomTrial() {
               plan. <br /> */}
               No credit card is required. After the trial, upgrade to{" "}
               <UpgradePlanModal
-                clickedPlan={PlanEnum.Business}
+                clickedPlan={PlanEnum.DataRooms}
                 highlightItem={["datarooms"]}
                 trigger="dataroom_trial_form"
               >
                 <button className="underline">Papermark Data Rooms</button>
               </UpgradePlanModal>{" "}
-              to continue using Data Room plan features.
+              to continue using advanced data room features.
             </div>
           </div>
         </form>

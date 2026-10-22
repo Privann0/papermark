@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { PlanEnum } from "@/ee/stripe/constants";
-import { CrownIcon, ListOrderedIcon } from "lucide-react";
+import { CrownIcon, ListOrderedIcon, Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
 
 import { useFeatureFlags } from "@/lib/hooks/use-feature-flags";
@@ -34,7 +34,9 @@ export default function RebuildIndexButton({
 }: RebuildIndexButtonProps) {
   const { isFeatureEnabled } = useFeatureFlags();
   const { isDatarooms, isDataroomsPlus, isTrial } = usePlan();
-  const [isLoading, setIsLoading] = useState(false);
+  const [loadingAction, setLoadingAction] = useState<
+    "rebuild" | "clear" | null
+  >(null);
   const [isOpen, setIsOpen] = useState(false);
 
   const isDataroomIndexEnabled = isFeatureEnabled("dataroomIndex");
@@ -52,7 +54,7 @@ export default function RebuildIndexButton({
     return null;
   }
 
-  const handleRebuildIndex = async () => {
+  const handleIndexAction = async (action: "rebuild" | "clear") => {
     if (!canUseFeature) {
       toast.error("Upgrade to Data Rooms Plus plan to use this feature.");
       return;
@@ -63,8 +65,10 @@ export default function RebuildIndexButton({
       return;
     }
 
+    const isClear = action === "clear";
+
     try {
-      setIsLoading(true);
+      setLoadingAction(action);
 
       const response = await fetch(
         `/api/teams/${teamId}/datarooms/${dataroomId}/calculate-indexes`,
@@ -73,12 +77,15 @@ export default function RebuildIndexButton({
           headers: {
             "Content-Type": "application/json",
           },
+          body: JSON.stringify({ action }),
         },
       );
 
       if (!response.ok) {
         const raw = await response.text();
-        let message = "Failed to rebuild indexes";
+        let message = isClear
+          ? "Failed to remove index"
+          : "Failed to rebuild indexes";
         try {
           const parsed = JSON.parse(raw) as { message?: string };
           if (typeof parsed.message === "string") message = parsed.message;
@@ -91,7 +98,9 @@ export default function RebuildIndexButton({
       const result = await response.json();
 
       toast.success(
-        `Hierarchical indexes rebuilt successfully! Updated ${result.totalUpdated} items (${result.foldersUpdated} folders, ${result.documentsUpdated} documents).`,
+        isClear
+          ? `Hierarchical index removed successfully! Cleared ${result.totalUpdated} items (${result.foldersUpdated} folders, ${result.documentsUpdated} documents).`
+          : `Hierarchical indexes rebuilt successfully! Updated ${result.totalUpdated} items (${result.foldersUpdated} folders, ${result.documentsUpdated} documents).`,
       );
 
       setIsOpen(false);
@@ -99,12 +108,19 @@ export default function RebuildIndexButton({
       // Trigger a page refresh to show updated indexes
       window.location.reload();
     } catch (error) {
-      console.error("Error rebuilding indexes:", error);
+      console.error(
+        isClear ? "Error removing index:" : "Error rebuilding indexes:",
+        error,
+      );
       toast.error(
-        error instanceof Error ? error.message : "Failed to rebuild indexes",
+        error instanceof Error
+          ? error.message
+          : isClear
+            ? "Failed to remove index"
+            : "Failed to rebuild indexes",
       );
     } finally {
-      setIsLoading(false);
+      setLoadingAction(null);
     }
   };
 
@@ -119,7 +135,7 @@ export default function RebuildIndexButton({
           disabled={disabled || !teamId || !dataroomId}
         />
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center">
             Rebuild Hierarchical Index
@@ -146,21 +162,47 @@ export default function RebuildIndexButton({
                   </li>
                   <li>Maintains the existing order and hierarchy</li>
                 </ul>
+                <p className="mt-3">
+                  Prefer plain names? Use{" "}
+                  <span className="font-medium">Remove Index</span> to clear the
+                  hierarchical numbering from all folders and documents.
+                </p>
               </div>
             </div>
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="gap-2 sm:justify-between">
           {canUseFeature ? (
             <>
-              <Button variant="outline" onClick={() => setIsOpen(false)}>
-                Cancel
+              <Button
+                variant="ghost"
+                className="whitespace-nowrap text-destructive hover:text-destructive"
+                onClick={() => handleIndexAction("clear")}
+                loading={loadingAction === "clear"}
+                disabled={loadingAction !== null}
+              >
+                <Trash2Icon className="h-4 w-4" />
+                Remove Index
               </Button>
-              <Button onClick={handleRebuildIndex} loading={isLoading}>
-                <ListOrderedIcon className="h-4 w-4" />
-                Rebuild Index
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setIsOpen(false)}
+                  disabled={loadingAction !== null}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  className="whitespace-nowrap"
+                  onClick={() => handleIndexAction("rebuild")}
+                  loading={loadingAction === "rebuild"}
+                  disabled={loadingAction !== null}
+                >
+                  <ListOrderedIcon className="h-4 w-4" />
+                  Rebuild Index
+                </Button>
+              </div>
             </>
           ) : (
             <UpgradePlanModal

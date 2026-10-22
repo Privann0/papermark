@@ -48,6 +48,27 @@ function formatTimeLeft(ms: number): string {
   return `${minutes} min left...`;
 }
 
+function downloadRejectedFileNames(files: RejectedFile[], downloadName: string) {
+  const allNames: string[] = [];
+  for (const rf of files) {
+    if (rf.skippedFileNames?.length) {
+      allNames.push(...rf.skippedFileNames);
+    } else {
+      allNames.push(rf.fileName);
+    }
+  }
+  if (allNames.length === 0) return;
+
+  const content = allNames.join("\n");
+  const blob = new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = downloadName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 const ItemRow = memo(
   function ItemRow({
     item,
@@ -305,17 +326,24 @@ export function UploadNotificationDrawer({
   const isPreparing = batch === null || itemCount === 0;
 
   // js-combine-iterations: single pass to partition rejected files
-  const { skippedFiles, failedFiles } = useMemo(() => {
+  const { skippedFiles, unsupportedFiles, failedFiles } = useMemo(() => {
     const skipped: RejectedFile[] = [];
+    const unsupported: RejectedFile[] = [];
     const failed: RejectedFile[] = [];
     for (const rf of rejectedFiles) {
       if (rf.reason === "plan-limit" || rf.reason === "max-files") {
         skipped.push(rf);
+      } else if (rf.reason === "file-type") {
+        unsupported.push(rf);
       } else {
         failed.push(rf);
       }
     }
-    return { skippedFiles: skipped, failedFiles: failed };
+    return {
+      skippedFiles: skipped,
+      unsupportedFiles: unsupported,
+      failedFiles: failed,
+    };
   }, [rejectedFiles]);
 
   const skippedCta = useMemo(() => {
@@ -343,29 +371,22 @@ export function UploadNotificationDrawer({
   }, [skippedFiles]);
 
   const handleDownloadSkipped = useCallback(() => {
-    const allNames: string[] = [];
-    for (const rf of skippedFiles) {
-      if (rf.skippedFileNames?.length) {
-        allNames.push(...rf.skippedFileNames);
-      } else {
-        allNames.push(rf.fileName);
-      }
-    }
-    if (allNames.length === 0) return;
-
-    const content = allNames.join("\n");
-    const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "skipped-files.txt";
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadRejectedFileNames(skippedFiles, "skipped-files.txt");
   }, [skippedFiles]);
+
+  const handleDownloadUnsupported = useCallback(() => {
+    downloadRejectedFileNames(unsupportedFiles, "unsupported-files.txt");
+  }, [unsupportedFiles]);
 
   const hasDownloadableSkipped = useMemo(
     () => skippedFiles.some((rf) => rf.skippedFileNames?.length || rf.fileName),
     [skippedFiles],
+  );
+
+  const hasDownloadableUnsupported = useMemo(
+    () =>
+      unsupportedFiles.some((rf) => rf.skippedFileNames?.length || rf.fileName),
+    [unsupportedFiles],
   );
 
   const timeLeftLabel = useMemo(() => {
@@ -488,6 +509,24 @@ export function UploadNotificationDrawer({
                   items={skippedFiles}
                   onDownload={
                     hasDownloadableSkipped ? handleDownloadSkipped : undefined
+                  }
+                />
+              ) : null}
+
+              {unsupportedFiles.length > 0 ? (
+                <CollapsibleSection
+                  icon={
+                    <AlertTriangleIcon className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  }
+                  label="not uploaded (unsupported file type)"
+                  count={unsupportedFiles.length}
+                  colorClass="text-amber-600 dark:text-amber-400"
+                  bgClass="bg-amber-50/60 dark:bg-amber-950/30"
+                  items={unsupportedFiles}
+                  onDownload={
+                    hasDownloadableUnsupported
+                      ? handleDownloadUnsupported
+                      : undefined
                   }
                 />
               ) : null}

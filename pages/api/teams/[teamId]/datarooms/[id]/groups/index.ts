@@ -5,6 +5,7 @@ import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { ItemType } from "@prisma/client";
 import { getServerSession } from "next-auth/next";
 
+import { enforceDataroomMemberScope } from "@/lib/api/rbac/guard";
 import { errorhandler } from "@/lib/errorHandler";
 import prisma from "@/lib/prisma";
 import { CustomUser } from "@/lib/types";
@@ -28,6 +29,11 @@ export default async function handle(
     const documentId = req.query?.documentId as string;
     const folderId = req.query?.folderId as string;
     const userId = (session.user as CustomUser).id;
+
+    // Scoped members may only read groups for their assigned rooms.
+    if (await enforceDataroomMemberScope({ userId, teamId, dataroomId, res })) {
+      return;
+    }
 
     try {
       const teamAccess = await prisma.userTeam.findUnique({
@@ -153,6 +159,11 @@ export default async function handle(
     };
 
     const { name } = req.body as { name: string };
+
+    // Scoped members may only create groups within their assigned rooms.
+    if (await enforceDataroomMemberScope({ userId, teamId, dataroomId, res })) {
+      return;
+    }
 
     try {
       // Check if the user is part of the team

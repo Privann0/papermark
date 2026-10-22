@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import { DataroomFolder } from "@prisma/client";
 import { ChevronDownIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { buildNestedFolderStructure } from "@/components/datarooms/folders/utils";
 import { cn } from "@/lib/utils";
@@ -102,6 +103,7 @@ export function DataroomFolderPicker({
   className?: string;
 }) {
   const { palette } = useViewerSurfaceTheme();
+  const { t } = useTranslation("dataroom");
 
   const nested = useMemo(() => {
     const roots = buildNestedFolderStructure(folders as any) as NestedFolder[];
@@ -110,16 +112,16 @@ export function DataroomFolderPicker({
 
   const triggerLabel = useMemo(() => {
     if (folderId === null) {
-      return "Home";
+      return t("folderPicker.home", "Home");
     }
     const current = folders.find((f) => f.id === folderId);
-    if (!current) return "Home";
+    if (!current) return t("folderPicker.home", "Home");
     return getHierarchicalDisplayName(
       current.name,
       current.hierarchicalIndex,
       dataroomIndexEnabled ?? false,
     );
-  }, [folderId, folders, dataroomIndexEnabled]);
+  }, [folderId, folders, dataroomIndexEnabled, t]);
 
   return (
     <DropdownMenu>
@@ -163,7 +165,7 @@ export function DataroomFolderPicker({
           }}
           onClick={() => setFolderId(null)}
         >
-          Home
+          {t("folderPicker.home", "Home")}
         </DropdownMenuItem>
         {nested.length > 0 ? <DropdownMenuSeparator /> : null}
         <FolderPickerBranch

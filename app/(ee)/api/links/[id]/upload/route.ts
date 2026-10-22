@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { isViewerAssigned } from "@/ee/features/request-lists/lib/assignments";
 import { runs } from "@trigger.dev/sdk";
 import { waitUntil } from "@vercel/functions";
 
@@ -8,6 +9,7 @@ import { verifyDataroomSession } from "@/lib/auth/dataroom-auth";
 import { DocumentData } from "@/lib/documents/create-document";
 import prisma from "@/lib/prisma";
 import { sendDataroomChangeNotificationTask } from "@/lib/trigger/dataroom-change-notification";
+import { scheduleDataroomTaskNotification } from "@/lib/trigger/dataroom-task-notification";
 import { sendDataroomUploadNotificationTask } from "@/lib/trigger/dataroom-upload-notification";
 import { supportsAdvancedExcelMode } from "@/lib/utils/get-content-type";
 import { sanitizePlainText } from "@/lib/utils/sanitize-html";
@@ -117,10 +119,11 @@ export async function POST(
   try {
     const linkId = params.id;
     const body = await request.json();
-    const { documentData, dataroomId, folderId } = body as {
+    const { documentData, dataroomId, folderId, taskId } = body as {
       documentData: DocumentData;
       dataroomId: string;
       folderId?: string;
+      taskId?: string;
     };
 
     if (!linkId || !documentData || !dataroomId) {
@@ -169,12 +172,7 @@ export async function POST(
       },
     });
 
-    if (
-      !link ||
-      !link.enableUpload ||
-      link.dataroomId !== dataroomId ||
-      !link.teamId
-    ) {
+    if (!link || link.dataroomId !== dataroomId || !link.teamId) {
       return NextResponse.json(
         { message: "Uploads not allowed for this link" },
         { status: 403 },
@@ -190,13 +188,100 @@ export async function POST(
         teamId: link.teamId,
         views: { some: { id: viewId } },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        email: true,
+        groups: {
+          select: {
+            groupId: true,
+          },
+        },
+      },
     });
 
     if (!viewer) {
       return NextResponse.json(
         { message: "Viewer not found" },
         { status: 404 },
+      );
+    }
+
+    let requestTask: { id: string; status: string } | null = null;
+    let taskUploadFolderId: string | null = null;
+
+    if (taskId) {
+      const task = await prisma.task.findFirst({
+        where: {
+          id: taskId,
+          dataroomId,
+          teamId: link.teamId,
+        },
+        select: {
+          id: true,
+          type: true,
+          status: true,
+          uploadFolderId: true,
+          assignments: {
+            select: {
+              viewerId: true,
+              groupId: true,
+              linkId: true,
+              email: true,
+            },
+          },
+        },
+      });
+
+      const assigned =
+        !!task &&
+        task.type === "UPLOAD" &&
+        isViewerAssigned(task.assignments, {
+          viewerId,
+          email: viewer.email ?? null,
+          linkId,
+          groupIds: new Set(viewer.groups.map((group) => group.groupId)),
+        });
+
+      if (!task || !assigned) {
+        return NextResponse.json(
+          { message: "Upload not allowed for this request" },
+          { status: 403 },
+        );
+      }
+
+      if (task.uploadFolderId) {
+        const taskUploadFolder = await prisma.dataroomFolder.findFirst({
+          where: {
+            id: task.uploadFolderId,
+            dataroomId,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        if (!taskUploadFolder) {
+          return NextResponse.json(
+            { message: "Invalid request upload destination" },
+            { status: 403 },
+          );
+        }
+
+        taskUploadFolderId = taskUploadFolder.id;
+      }
+
+      requestTask = {
+        id: task.id,
+        status: task.status,
+      };
+    }
+
+    // Normal visitor uploads still require the link-level upload permission.
+    // An assigned Request List UPLOAD task is the only exception.
+    if (!link.enableUpload && !requestTask) {
+      return NextResponse.json(
+        { message: "Uploads not allowed for this link" },
+        { status: 403 },
       );
     }
 
@@ -256,7 +341,9 @@ export async function POST(
 
     let dataroomFolderId: string | null = null;
 
-    if (allowedUploadFolderIds.length === 0) {
+    if (taskUploadFolderId) {
+      dataroomFolderId = taskUploadFolderId;
+    } else if (allowedUploadFolderIds.length === 0) {
       // No restriction: validate the visitor-chosen folder belongs to this
       // dataroom before using it.
       if (folderId) {
@@ -310,8 +397,67 @@ export async function POST(
         dataroomId: dataroomId,
         dataroomDocumentId: newDataroomDocument.id,
         teamId: link.teamId,
+        taskId: requestTask?.id ?? null,
       },
     });
+
+    if (requestTask) {
+      await prisma.$transaction(async (tx) => {
+        // Always record the upload itself.
+        await tx.taskActivity.create({
+          data: {
+            taskId: requestTask.id,
+            type: "UPLOADED",
+            viewerId,
+            viewId,
+          },
+        });
+
+        // Uploading fulfills the viewer side of the request. Use a conditional
+        // update so a concurrent admin COMPLETED transition is never
+        // overwritten by a stale requestTask snapshot.
+        if (
+          requestTask.status !== "SUBMITTED" &&
+          requestTask.status !== "COMPLETED"
+        ) {
+          const update = await tx.task.updateMany({
+            where: {
+              id: requestTask.id,
+              status: requestTask.status,
+            },
+            data: {
+              status: "SUBMITTED",
+            },
+          });
+
+          if (update.count === 1) {
+            await tx.taskActivity.create({
+              data: {
+                taskId: requestTask.id,
+                type: "STATUS_CHANGED",
+                fromStatus: requestTask.status,
+                toStatus: "SUBMITTED",
+                viewerId,
+                viewId,
+              },
+            });
+          }
+        }
+      });
+
+      waitUntil(
+        scheduleDataroomTaskNotification({
+          taskId: requestTask.id,
+          dataroomId,
+          teamId: link.teamId,
+        }).catch((error) => {
+          console.error(
+            "Failed to schedule Request List activity notification:",
+            error,
+          );
+        }),
+      );
+    }
 
     // 4. Send upload notification to team if enabled
     if (link.enableNotification) {

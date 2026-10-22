@@ -4,6 +4,7 @@ import { addDays } from "date-fns";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 
+import { enforceDataroomMemberScope } from "@/lib/api/rbac/guard";
 import prisma from "@/lib/prisma";
 import {
   getTotalDocumentDuration,
@@ -80,6 +81,14 @@ export default async function handler(
     if (!team) {
       return res.status(401).json({ error: "Unauthorized" });
     }
+
+    // Team-wide analytics is not part of the dataroom-scoped surface.
+    const denied = await enforceDataroomMemberScope({
+      userId: (session.user as CustomUser).id,
+      teamId,
+      res,
+    });
+    if (denied) return;
 
     // Get pause date filter if team is paused
     const pauseStartsAt = team.pauseStartsAt;

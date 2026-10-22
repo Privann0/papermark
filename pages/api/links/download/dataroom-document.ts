@@ -269,9 +269,12 @@ export default async function handle(
           : undefined,
       });
 
-      // For PDF files with watermark, always buffer and process
+      const versionType = downloadDocuments[0].document!.versions[0].type;
+
+      // For PDFs and images with watermark, buffer and process. Images are
+      // converted to a watermarked PDF.
       if (
-        downloadDocuments[0].document!.versions[0].type === "pdf" &&
+        (versionType === "pdf" || versionType === "image") &&
         view.link.enableWatermark &&
         view.link.watermarkConfig
       ) {
@@ -285,7 +288,14 @@ export default async function handle(
             },
             body: JSON.stringify({
               url: downloadUrl,
-              numPages: downloadDocuments[0].document!.versions[0].numPages,
+              fileType: versionType === "image" ? "image" : "pdf",
+              numPages:
+                versionType === "image"
+                  ? 1
+                  : downloadDocuments[0].document!.versions[0].numPages,
+              // Flatten form/annotation/layers; the watermark is drawn into
+              // the page content stream so it can't be removed as a layer.
+              flatten: true,
               watermarkConfig: view.link.watermarkConfig,
               originalFileName: downloadDocuments[0].document!.name,
               viewerData: {

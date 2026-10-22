@@ -26,11 +26,13 @@ type MixedItem =
 const DocumentFileItem = memo(
   ({
     document,
+    dataroomId,
     router,
   }: {
     document: DataroomFolderWithDocuments["documents"][0] & {
       itemType: "document";
     };
+    dataroomId: string;
     router: any;
   }) => {
     const documentDisplayName = useHierarchicalDisplayName(
@@ -41,7 +43,9 @@ const DocumentFileItem = memo(
     return (
       <FileTree.File
         name={documentDisplayName}
-        onToggle={() => router.push(`/documents/${document.document.id}`)}
+        onToggle={() =>
+          router.push(`/datarooms/${dataroomId}/document/${document.id}`)
+        }
       />
     );
   },
@@ -92,7 +96,12 @@ const FolderComponent = memo(
             );
           } else {
             return (
-              <DocumentFileItem key={item.id} document={item} router={router} />
+              <DocumentFileItem
+                key={item.id}
+                document={item}
+                dataroomId={dataroomId}
+                router={router}
+              />
             );
           }
         }),

@@ -8,6 +8,7 @@ import { TeamContextType } from "@/context/team-context";
 import {
   ArchiveXIcon,
   BetweenHorizontalStartIcon,
+  DownloadIcon,
   FilePenIcon,
   FileSlidersIcon,
   FolderInputIcon,
@@ -20,6 +21,7 @@ import { mutate } from "swr";
 import { type DataroomFolderDocument } from "@/lib/swr/use-dataroom";
 import { type DocumentWithLinksAndLinkCountAndViewCount } from "@/lib/types";
 import { cn, nFormatter, timeAgo } from "@/lib/utils";
+import { downloadFromLinkEndpoint } from "@/lib/utils/download-document";
 import { fileIcon } from "@/lib/utils/get-file-icon";
 import {
   HIERARCHICAL_DISPLAY_STYLE,
@@ -175,6 +177,24 @@ export default function DataroomDocumentCard({
     );
   };
 
+  const handleDownloadDocument = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMenuOpen(false);
+
+    toast.promise(
+      downloadFromLinkEndpoint({
+        endpoint: `/api/teams/${teamInfo?.currentTeam?.id}/documents/${dataroomDocument.document.id}/download`,
+        body: {},
+        fallbackFileName: dataroomDocument.document.name,
+      }),
+      {
+        loading: "Preparing download...",
+        success: "Download started.",
+        error: (err) => err.message || "Failed to download. Try again.",
+      },
+    );
+  };
+
   const handleMenuStateChange = (open: boolean) => {
     if (isFirstClick) {
       setMenuOpen(true); // Keep the dropdown open on the first click
@@ -196,7 +216,7 @@ export default function DataroomDocumentCard({
       e.stopPropagation();
       return;
     }
-    router.push(`/documents/${dataroomDocument.document.id}`);
+    router.push(`/datarooms/${dataroomId}/document/${dataroomDocument.id}`);
   };
 
   return (
@@ -262,7 +282,7 @@ export default function DataroomDocumentCard({
               onClick={(e) => {
                 e.stopPropagation();
               }}
-              href={`/documents/${dataroomDocument.document.id}`}
+              href={`/datarooms/${dataroomId}/document/${dataroomDocument.id}`}
               className="z-10 flex shrink-0 items-center space-x-1 rounded-md bg-gray-200 px-1.5 py-0.5 transition-all duration-75 hover:scale-105 active:scale-100 dark:bg-gray-700 sm:px-2"
             >
               <BarChart className="h-3 w-3 text-muted-foreground sm:h-4 sm:w-4" />
@@ -301,6 +321,12 @@ export default function DataroomDocumentCard({
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" ref={dropdownRef}>
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                {dataroomDocument.document.type !== "notion" ? (
+                  <DropdownMenuItem onClick={handleDownloadDocument}>
+                    <DownloadIcon className="mr-2 h-4 w-4" />
+                    Download
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();

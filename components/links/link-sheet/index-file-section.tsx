@@ -35,7 +35,7 @@ export default function IndexFileSection({
   return (
     <div className="pb-5">
       <LinkItem
-        title="Enable index file generation"
+        title="Index file generation"
         enabled={enabled}
         link="https://www.papermark.com/help/article/link-settings"
         action={handleEnableIndexFile}

@@ -48,6 +48,7 @@ model User {
   sessions       Session[]
   documents      Document[]
   teams          UserTeam[]
+  userDatarooms  UserDataroom[]
   domains        Domain[]
   chats          Chat[]
   contactId      String?
@@ -63,9 +64,13 @@ model User {
   participatedConversations ConversationParticipant[]
   messages                  Message[]
 
+  // Buy-side Q&A: questions authored by this user
+  createdDataroomQuestions DataroomQuestion[]
+
   // FAQ system
   publishedFaqItems  DataroomFaqItem[]
   createdAnnotations DocumentAnnotation[] // Annotations created by this user
+  createdRedactionJobs DocumentRedactionJob[] // Redaction jobs created by this user
 
   installedIntegrations InstalledIntegration[]
 
@@ -73,39 +78,20 @@ model User {
 
   frozenDatarooms Dataroom[] @relation("frozenDatarooms")
 
+  // request list (task system)
+  createdTasks   Task[]         @relation("createdTasks")
+  taskActivities TaskActivity[] @relation("taskActivities")
+
   notificationPreferences NotificationPreference[]
-}
 
-model Brand {
-  id                             String  @id @default(cuid())
-  logo                           String? // This should be a reference to where the file is stored (S3, Google Cloud Storage, etc.)
-  banner                         String? // Banner image for dataroom view (fallback)
-  brandColor                     String? // This should be a reference to the brand color
-  accentColor                    String? // This should be a reference to the accent color (front-page background)
-  accentButtonColor              String? // Color used for CTA buttons (separate from brand/background)
-  applyAccentColorToDataroomView Boolean @default(false) // Global default for whether accentColor applies to dataroom list/tree viewer background
-  welcomeMessage                 String? // This should be a reference to the welcome message
-  ctaLabel                       String? // Default CTA button label (inherited by datarooms unless overridden)
-  ctaUrl                         String? // Default CTA button URL (inherited by datarooms unless overridden)
-
-  cardLayout            String  @default("LIST")
-  showFolderTree        Boolean @default(true)
-  viewerLayoutPreset    String  @default("STANDARD")
-  viewerHeaderStyle     String  @default("DEFAULT")
-  hideFolderIconsInMain Boolean @default(false)
-
-  // Default Open Graph / social preview for shared links (per-link settings override)
-  customLinkPreviewEnabled Boolean @default(false)
-  linkPreviewTitle         String?
-  linkPreviewDescription   String?
-  linkPreviewImage         String?
-  linkPreviewFavicon       String?
-
-  teamId String @unique
-  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // Dub referral program
+  referralTrack           ReferralTrack?
+  referralTrackSelectedAt DateTime?
+  // Self-declared answers from the partner form, following the same shape-in-a-column
+  // convention as Team.surveyData:
+  // { useCase?: string, useCaseOther?: string, role?: string, roleOther?: string }
+  referralProfile         Json?
+  referralInvites         ReferralInvite[]
 }
 
 model VerificationToken {
@@ -170,6 +156,9 @@ model View {
 
   uploadedDocuments DocumentUpload[] // uploaded documents by this view
 
+  // request list (task system) — activity authored during this view
+  taskActivities TaskActivity[]
+
   // AI chats
   chats Chat[]
 
@@ -219,7 +208,17 @@ model Viewer {
   participatedConversations ConversationParticipant[]
   messages                  Message[]
 
+  // Buy-side Q&A: admin-origin threads where this viewer is the recipient/seller
+  recipientConversations Conversation[] @relation("ConversationRecipient")
+
+  // Buy-side Q&A: question assignments targeting this viewer directly
+  questionAssignments DataroomQuestionAssignment[]
+
   uploadedDocuments DocumentUpload[] // uploaded documents by this viewer
+
+  // request list (task system)
+  taskAssignments TaskAssignment[]
+  taskActivities  TaskActivity[]
 
   // AI chats
   chats Chat[]
@@ -251,6 +250,13 @@ model Invitation {
   team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   token     String   @unique
+
+  // Role the invitee will be assigned on acceptance. Defaults to MEMBER to
+  // preserve historic behaviour for invitations created before this column.
+  role        Role     @default(MEMBER)
+  // Datarooms the invitee is scoped to, applied as UserDataroom rows on
+  // acceptance. Only meaningful when role == DATAROOM_MEMBER.
+  dataroomIds String[] @default([])
 
   @@unique([email, teamId])
 }
@@ -369,10 +375,15 @@ model FeedbackResponse {
 }
 
 model Agreement {
-  id          String @id @default(cuid())
-  name        String // Easily identifiable name for the agreement
-  content     String // This will store the agreement content (URL or text)
-  contentType String @default("LINK") // "LINK" or "TEXT" - determines how content should be displayed
+  id              String @id @default(cuid())
+  name            String // Easily identifiable name for the agreement
+  content         String // This will store the agreement content (URL or text)
+  contentType     String @default("LINK") // "LINK" or "TEXT" - determines how content should be displayed
+  signingProvider String @default("LEGACY")
+
+  signingExternalId String? @unique
+  signingEnvelopeId String?
+  signingTemplateId String?
 
   links     Link[]
   responses AgreementResponse[]
@@ -395,14 +406,35 @@ model AgreementResponse {
   id          String    @id @default(cuid())
   agreementId String
   agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
-  viewId      String    @unique
-  view        View      @relation(fields: [viewId], references: [id], onDelete: Cascade)
+  viewId      String?   @unique
+  view        View?     @relation(fields: [viewId], references: [id], onDelete: Cascade)
+
+  linkId String?
+
+  signerEmail String?
+  signerName  String?
+
+  signingStatus     String    @default("PENDING")
+  signingExternalId String?   @unique
+  signingEnvelopeId String?
+  signingDocumentId Int?
+  signedAt          DateTime?
+  completedAt       DateTime?
+
+  // Papermark-side mirror of the signed PDF. Populated by the signing webhook
+  // once the document is final so downloads can be served from our own storage
+  // without depending on Documenso's uptime.
+  signedFileKey         String?
+  signedFileName        String?
+  signedFileStorageType DocumentStorageType?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([agreementId])
   @@index([viewId])
+  @@index([linkId])
+  @@index([signerEmail])
 }
 
 model IncomingWebhook {

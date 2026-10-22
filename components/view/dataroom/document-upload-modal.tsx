@@ -6,6 +6,8 @@ import {
   PlusIcon,
   UploadIcon,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 
@@ -50,6 +52,7 @@ export function DocumentUploadModal({
   folderId,
   folderName,
   allowedFolders,
+  isPreview,
   triggerClassName,
 }: {
   linkId: string;
@@ -64,10 +67,12 @@ export function DocumentUploadModal({
    * `undefined` means "no restriction".
    */
   allowedFolders?: AllowedFolder[] | null;
+  isPreview?: boolean;
   /** Optional className applied to the trigger button so callers can theme it
    *  to the surrounding surface (e.g. dark viewer background). */
   triggerClassName?: string;
 }) {
+  const { t } = useTranslation("dataroom");
   const [isOpen, setIsOpen] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
 
@@ -125,17 +130,28 @@ export function DocumentUploadModal({
   return (
     <>
       <Button
-        onClick={() => setIsOpen(true)}
+        onClick={() => {
+          if (isPreview) {
+            toast.error(
+              t(
+                "upload.previewDisabled",
+                "Uploading files isn't available in preview mode.",
+              ),
+            );
+            return;
+          }
+          setIsOpen(true);
+        }}
         size="sm"
         variant="outline"
         className={cn(
           "group flex items-center justify-start gap-x-3 px-3 text-left",
           triggerClassName,
         )}
-        title="Add Document"
+        title={t("upload.trigger", "Add Document")}
       >
         <PlusIcon className="h-5 w-5 shrink-0" aria-hidden="true" />
-        <span>Add Document</span>
+        <span>{t("upload.trigger", "Add Document")}</span>
       </Button>
 
       <Dialog open={isOpen} onOpenChange={handleOpenChange}>
@@ -143,25 +159,24 @@ export function DocumentUploadModal({
           <DialogHeader className="border-b border-gray-100 bg-gray-50 px-6 py-5 dark:border-gray-800 dark:bg-gray-900">
             <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
               <UploadIcon className="h-5 w-5 text-muted-foreground" />
-              Upload Document to Dataroom
+              {t("upload.title", "Upload Document to Dataroom")}
             </DialogTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              Your document will appear immediately in the dataroom and will be
-              processed in the background.
+              {t("upload.description", "Your document will appear immediately in the dataroom and will be processed in the background.")}
             </p>
 
             {showSelect ? (
               <div className="mt-3 space-y-1.5">
                 <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <FolderIcon className="h-3.5 w-3.5" />
-                  Destination folder
+                  {t("upload.destinationLabel", "Destination folder")}
                 </label>
                 <Select
                   value={destinationId}
                   onValueChange={(value) => setDestinationId(value)}
                 >
                   <SelectTrigger className="h-9 w-full">
-                    <SelectValue placeholder="Select destination folder" />
+                    <SelectValue placeholder={t("upload.selectDestination", "Select destination folder")} />
                   </SelectTrigger>
                   <SelectContent>
                     {allowedFolders!.map((folder) => (
@@ -181,13 +196,13 @@ export function DocumentUploadModal({
               <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <FolderIcon className="h-3.5 w-3.5" />
                 <span>
-                  Uploading to:{" "}
+                  {t("upload.uploadingTo", "Uploading to:")}{" "}
                   <span className="font-medium text-foreground">
                     {destinationName}
                   </span>
                   {showReadOnlyRestriction ? (
                     <span className="ml-1 text-muted-foreground">
-                      (set by the dataroom owner)
+                      {t("upload.setByOwner", "(set by the dataroom owner)")}
                     </span>
                   ) : null}
                 </span>
@@ -200,10 +215,10 @@ export function DocumentUploadModal({
               <div className="flex flex-col items-center justify-center py-8">
                 <CheckCircle2 className="h-12 w-12 text-green-500" />
                 <p className="mt-3 text-sm font-medium text-foreground">
-                  Document uploaded successfully!
+                  {t("upload.success", "Document uploaded successfully!")}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Your document is now visible in the dataroom.
+                  {t("upload.successDescription", "Your document is now visible in the dataroom.")}
                 </p>
               </div>
             ) : (

@@ -205,8 +205,10 @@ export default async function handle(
           : undefined,
       });
 
+      const versionType = view.document!.versions[0].type;
+
       if (
-        view.document!.versions[0].type === "pdf" &&
+        (versionType === "pdf" || versionType === "image") &&
         view.link.enableWatermark &&
         view.link.watermarkConfig
       ) {
@@ -220,7 +222,15 @@ export default async function handle(
             },
             body: JSON.stringify({
               url: downloadUrl,
-              numPages: view.document!.versions[0].numPages,
+              // Images are a single page; convert them to a watermarked PDF.
+              fileType: versionType === "image" ? "image" : "pdf",
+              numPages:
+                versionType === "image"
+                  ? 1
+                  : view.document!.versions[0].numPages,
+              // Flatten form/annotation/layers; the watermark is drawn into
+              // the page content stream so it can't be removed as a layer.
+              flatten: true,
               watermarkConfig: view.link.watermarkConfig,
               originalFileName: view.document!.name,
               viewerData: {

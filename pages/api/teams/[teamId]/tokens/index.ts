@@ -20,37 +20,46 @@ export default async function handle(
 ) {
   const { teamId } = req.query as { teamId: string };
 
-  const features = await getFeatureFlags({ teamId });
-  if (!features.tokens) {
+  // Authenticate and verify team membership before anything else, so we never
+  // leak team details (including plan) to unauthenticated callers or non-members.
+  const session = await getServerSession(req, res, authOptions);
+  if (!session) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const userId = (session.user as CustomUser).id;
+
+  const userTeam = await prisma.userTeam.findUnique({
+    where: { userId_teamId: { userId, teamId } },
+    select: { role: true },
+  });
+  if (!userTeam) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  // Tokens require a Business plan or higher (or a Data Rooms trial), or the
+  // `tokens` beta feature flag enabled for the team. Only hit Edge Config for
+  // the flag when the plan check fails, so paid teams skip that latency.
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    select: { plan: true },
+  });
+  const plan = team?.plan ?? "";
+  let hasTokensAccess =
+    plan.includes("business") ||
+    plan.includes("datarooms") ||
+    plan.includes("drtrial");
+  if (!hasTokensAccess) {
+    const features = await getFeatureFlags({ teamId });
+    hasTokensAccess = Boolean(features.tokens);
+  }
+  if (!hasTokensAccess) {
     return res
       .status(403)
-      .json({ error: "This feature is not available for your team" });
+      .json({ error: "This feature requires a Business plan or higher." });
   }
 
   if (req.method === "GET") {
     try {
-      const session = await getServerSession(req, res, authOptions);
-      if (!session) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      const { teamId } = req.query as { teamId: string };
-      const userId = (session.user as CustomUser).id;
-
-      // Check if user is in team
-      const userTeam = await prisma.userTeam.findUnique({
-        where: {
-          userId_teamId: {
-            userId,
-            teamId,
-          },
-        },
-      });
-
-      if (!userTeam) {
-        return res.status(403).json({ error: "Unauthorized" });
-      }
-
       // Fetch tokens
       const tokens = await prisma.restrictedToken.findMany({
         where: {
@@ -89,13 +98,8 @@ export default async function handle(
       return res.status(500).json({ error: "Error fetching tokens" });
     }
   } else if (req.method === "POST") {
-    const session = await getServerSession(req, res, authOptions);
-    if (!session) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
-    const { teamId } = req.query as { teamId: string };
-    const userId = (session.user as CustomUser).id;
+    // Any team member can create a token. The resulting key is still scoped to
+    // the team and limited by the scopes selected on creation.
     const {
       name,
       scopes,
@@ -107,24 +111,6 @@ export default async function handle(
     };
 
     try {
-      // Membership check — any role in the team can create a token. The
-      // resulting key is still scoped to the team and limited by the scopes
-      // selected on creation.
-      const userTeam = await prisma.userTeam.findUnique({
-        where: {
-          userId_teamId: {
-            userId,
-            teamId,
-          },
-        },
-        select: {
-          role: true,
-        },
-      });
-      if (!userTeam) {
-        return res.status(403).json({ error: "Unauthorized" });
-      }
-
       // Validate name up front so a missing / non-string / whitespace-only
       // value produces a 400 instead of bubbling up as a Prisma 500.
       if (typeof name !== "string" || name.trim().length === 0) {
@@ -218,12 +204,6 @@ export default async function handle(
     }
   } else if (req.method === "PATCH") {
     try {
-      const session = await getServerSession(req, res, authOptions);
-      if (!session) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      const { teamId } = req.query as { teamId: string };
       const {
         tokenId,
         name,
@@ -233,18 +213,9 @@ export default async function handle(
         name?: string;
         scopes?: string[] | string;
       };
-      const userId = (session.user as CustomUser).id;
 
       if (!tokenId || typeof tokenId !== "string") {
         return res.status(400).json({ error: "tokenId is required" });
-      }
-
-      const userTeam = await prisma.userTeam.findUnique({
-        where: { userId_teamId: { userId, teamId } },
-        select: { role: true },
-      });
-      if (!userTeam) {
-        return res.status(403).json({ error: "Unauthorized" });
       }
 
       const existing = await prisma.restrictedToken.findFirst({
@@ -321,30 +292,10 @@ export default async function handle(
     }
   } else if (req.method === "DELETE") {
     try {
-      const session = await getServerSession(req, res, authOptions);
-      if (!session) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      const { teamId } = req.query as { teamId: string };
       const { tokenId } = req.body;
-      const userId = (session.user as CustomUser).id;
-
-      // Check if user is in team and has admin role
-      const { role } = await prisma.userTeam.findUniqueOrThrow({
-        where: {
-          userId_teamId: {
-            userId,
-            teamId,
-          },
-        },
-        select: {
-          role: true,
-        },
-      });
 
       // Only admins can delete tokens
-      if (role !== "ADMIN") {
+      if (userTeam.role !== "ADMIN") {
         return res.status(403).json({
           error:
             "You don't have the permissions to delete a token. Please contact your administrator.",

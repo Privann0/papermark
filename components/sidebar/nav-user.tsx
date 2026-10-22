@@ -8,6 +8,7 @@ import {
   ChevronsUpDown,
   CircleUserRound,
   FileTextIcon,
+  GiftIcon,
   LifeBuoyIcon,
   LogOut,
   MailIcon,

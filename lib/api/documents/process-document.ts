@@ -1,20 +1,19 @@
-import { get } from "@vercel/edge-config";
-import { parsePageId } from "notion-utils";
-
-import { DocumentData } from "@/lib/documents/create-document";
-import { isTrustedTeam } from "@/lib/edge-config/trusted-teams";
-import { copyFileToBucketServer } from "@/lib/files/copy-file-to-bucket-server";
-import notion from "@/lib/notion";
-import { getNotionPageIdFromSlug } from "@/lib/notion/utils";
-import prisma from "@/lib/prisma";
-import {
+import type {
   convertFilesToPdfTask,
   convertKeynoteToPdfTask,
-} from "@/lib/trigger/convert-files";
+} from "@/ee/features/conversions/lib/trigger/convert-files";
+import { tasks } from "@trigger.dev/sdk";
+
+import { validateExternalDocumentUrl } from "@/lib/api/documents/validate-external-url";
+import { DocumentData } from "@/lib/documents/create-document";
+import { getFeatureFlags } from "@/lib/featureFlags";
+import prisma from "@/lib/prisma";
 import { processVideo } from "@/lib/trigger/optimize-video-files";
 import { convertPdfToImageRoute } from "@/lib/trigger/pdf-to-image-route";
-import { getExtension, log } from "@/lib/utils";
+import { getExtension } from "@/lib/utils";
+import { isMarkdownFile } from "@/lib/utils/get-content-type";
 import { conversionQueueName } from "@/lib/utils/trigger-utils";
+import { videoProcessingMode } from "@/lib/video/processing-plan";
 import { sendDocumentCreatedWebhook } from "@/lib/webhook/triggers/document-created";
 import { sendLinkCreatedWebhook } from "@/lib/webhook/triggers/link-created";
 
@@ -53,61 +52,16 @@ export const processDocument = async ({
   // Get passed type property or alternatively, the file extension and save it as the type
   const type = supportedFileType || getExtension(name);
 
-  // Check whether the Notion page is publically accessible or not
-  if (type === "notion") {
-    try {
-      let pageId = parsePageId(key, { uuid: false });
-
-      // If parsePageId fails, try to get page ID from slug
-      if (!pageId) {
-        try {
-          const pageIdFromSlug = await getNotionPageIdFromSlug(key);
-          pageId = pageIdFromSlug || undefined;
-        } catch (slugError) {
-          throw new Error("Unable to extract page ID from Notion URL");
-        }
-      }
-
-      // if the page isn't accessible then end the process here.
-      if (!pageId) {
-        throw new Error("Notion page not found");
-      }
-      await notion.getPage(pageId);
-    } catch (error) {
-      throw new Error("This Notion page isn't publically available.");
+  if (type === "html") {
+    const featureFlags = await getFeatureFlags({ teamId });
+    if (!featureFlags.htmlDocuments) {
+      throw new Error("HTML documents are not enabled for this team.");
     }
   }
 
-  // For link type, validate URL format
-  if (type === "link") {
-    try {
-      new URL(key);
-
-      // Skip keyword check for trusted teams
-      const trusted = await isTrustedTeam(teamId);
-      if (!trusted) {
-        const keywords = await get("keywords");
-        if (Array.isArray(keywords) && keywords.length > 0) {
-          const matchedKeyword = keywords.find(
-            (keyword) =>
-              typeof keyword === "string" &&
-              key.toLowerCase().includes(keyword.toLowerCase()),
-          );
-
-          if (matchedKeyword) {
-            log({
-              message: `Link document creation blocked: ${matchedKeyword} \n\n \`Metadata: {teamId: ${teamId}, url: ${key}}\``,
-              type: "error",
-              mention: true,
-            });
-            throw new Error("This URL is not allowed");
-          }
-        }
-      }
-    } catch (error) {
-      throw new Error("Invalid URL format for link document.");
-    }
-  }
+  // For notion/link documents, validate the external URL (Notion page must be
+  // public; link URLs must be well-formed and not blocked). No-op otherwise.
+  await validateExternalDocumentUrl({ type, key, teamId });
 
   // `folderId` (resolved by callers like the public v1 API) wins over the
   // path-based lookup; the path lookup remains for the dashboard upload flow
@@ -131,6 +85,8 @@ export const processDocument = async ({
       name,
     );
 
+  const isMarkdown = isMarkdownFile({ name, contentType });
+
   // determine if the document is download only
   const isDownloadOnly =
     type === "zip" ||
@@ -139,6 +95,7 @@ export const processDocument = async ({
     type === "other" ||
     contentType === "text/tab-separated-values" ||
     type === "cad" ||
+    isMarkdown ||
     isDownloadOnlyByExtension;
 
   // Save data to the database
@@ -192,7 +149,8 @@ export const processDocument = async ({
     (contentType === "application/vnd.apple.keynote" ||
       contentType === "application/x-iwork-keynote-sffkey")
   ) {
-    await convertKeynoteToPdfTask.trigger(
+    await tasks.trigger<typeof convertKeynoteToPdfTask>(
+      "convert-keynote-to-pdf",
       {
         documentId: document.id,
         documentVersionId: document.versions[0].id,
@@ -211,9 +169,11 @@ export const processDocument = async ({
     );
   } else if (
     (type === "docs" || type === "slides") &&
-    !isDownloadOnlyByExtension
+    !isDownloadOnlyByExtension &&
+    !isMarkdown
   ) {
-    await convertFilesToPdfTask.trigger(
+    await tasks.trigger<typeof convertFilesToPdfTask>(
+      "convert-files-to-pdf",
       {
         documentId: document.id,
         documentVersionId: document.versions[0].id,
@@ -232,21 +192,15 @@ export const processDocument = async ({
     );
   }
 
-  if (
-    type === "video" &&
-    contentType !== "video/mp4" &&
-    contentType?.startsWith("video/")
-  ) {
+  const videoMode = videoProcessingMode({ type, contentType });
+  if (videoMode) {
     await processVideo.trigger(
       {
-        videoUrl: key,
-        teamId,
-        docId: key.split("/")[1], // Extract doc_xxxx from teamId/doc_xxxx/filename
         documentVersionId: document.versions[0].id,
-        fileSize: fileSize || 0,
+        mode: videoMode,
       },
       {
-        idempotencyKey: `${teamId}-${document.versions[0].id}`,
+        idempotencyKey: `${teamId}-${document.versions[0].id}-${videoMode}`,
         tags: [
           `team_${teamId}`,
           `document_${document.id}`,
@@ -280,12 +234,6 @@ export const processDocument = async ({
   }
 
   if (type === "sheet" && enableExcelAdvancedMode) {
-    await copyFileToBucketServer({
-      filePath: document.versions[0].file,
-      storageType: document.versions[0].storageType,
-      teamId,
-    });
-
     await prisma.documentVersion.update({
       where: { id: document.versions[0].id },
       data: { numPages: 1 },

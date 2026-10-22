@@ -1,15 +1,11 @@
-import { PlanEnum } from "@/ee/stripe/constants";
-
 import { useFeatureFlags } from "@/lib/hooks/use-feature-flags";
 import { useIsAdmin } from "@/lib/hooks/use-is-admin";
-import { usePlan } from "@/lib/swr/use-billing";
 
 import { NavMenu } from "../navigation-menu";
 
 export function SettingsHeader() {
   const { features } = useFeatureFlags();
   const { isAdmin } = useIsAdmin();
-  const { isDataroomsPlus, isTrial } = usePlan();
 
   return (
     <header>
@@ -57,17 +53,9 @@ export function SettingsHeader() {
             segment: "agreements",
           },
           {
-            label: "Webhooks",
-            href: `/settings/webhooks`,
-            segment: "webhooks",
-          },
-          {
             label: "Notifications",
             href: `/settings/notifications`,
             segment: "notifications",
-            limited: !isDataroomsPlus && !isTrial,
-            clickedPlan: PlanEnum.DataRoomsPlus,
-            highlightItem: ["invite"],
           },
           {
             label: "Slack",
@@ -81,16 +69,14 @@ export function SettingsHeader() {
             disabled: !features?.ai,
           },
           {
-            label: "Tokens",
-            href: `/settings/tokens`,
-            segment: "tokens",
-            disabled: !features?.tokens,
+            label: "Webhooks",
+            href: `/settings/webhooks`,
+            segment: "webhooks",
           },
           {
-            label: "API",
-            href: `/settings/incoming-webhooks`,
-            segment: "incoming-webhooks",
-            disabled: !features?.incomingWebhooks,
+            label: "API Keys",
+            href: `/settings/tokens`,
+            segment: "tokens",
           },
           {
             label: "Security",
@@ -102,7 +88,6 @@ export function SettingsHeader() {
             label: "Billing",
             href: `/settings/billing`,
             segment: "billing",
-            disabled: !isAdmin,
           },
         ]}
       />

@@ -248,6 +248,7 @@ export function useDataroomFoldersTree({
 
   const { data: folders, error } = useSWR<DataroomFolderWithDocuments[]>(
     teamId &&
+      dataroomId &&
       `/api/teams/${teamId}/datarooms/${dataroomId}/folders${include_documents ? "?include_documents=true" : ""}`,
     fetcher,
     {

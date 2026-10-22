@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 
 import { useState } from "react";
 
+import { PlanEnum } from "@/ee/stripe/constants";
 import {
   BarChart3Icon,
   FolderIcon,
@@ -12,8 +13,8 @@ import {
   ShieldCheckIcon,
 } from "lucide-react";
 
+import { useSelfMembership } from "@/lib/hooks/use-self-membership";
 import { usePlan } from "@/lib/swr/use-billing";
-import { PlanEnum } from "@/ee/stripe/constants";
 import { cn } from "@/lib/utils";
 
 import { UpgradePlanModal } from "@/components/billing/upgrade-plan-modal";
@@ -26,6 +27,8 @@ export function MobileBottomNav() {
   const router = useRouter();
   const [moreOpen, setMoreOpen] = useState(false);
   const { isBusiness, isDatarooms, isDataroomsPlus, isTrial } = usePlan();
+  // Dataroom-scoped members only ever see their assigned data rooms.
+  const { isDataroomMember } = useSelfMembership();
 
   const dataroomsEnabled =
     isBusiness || isDatarooms || isDataroomsPlus || isTrial;
@@ -44,8 +47,9 @@ export function MobileBottomNav() {
     return router.pathname.includes(match);
   };
 
-  const moreIsActive =
-    !["dashboard", "documents", "datarooms"].some((m) => isActive(m));
+  const moreIsActive = !["dashboard", "documents", "datarooms"].some((m) =>
+    isActive(m),
+  );
 
   const tabClass = (active: boolean) =>
     cn(
@@ -81,7 +85,7 @@ export function MobileBottomNav() {
     const base = `/datarooms/${dataroomId}`;
     return (
       <>
-        <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background pb-[env(safe-area-inset-bottom,0px)] [-webkit-tap-highlight-color:transparent] touch-manipulation md:hidden">
+        <nav className="fixed inset-x-0 bottom-0 z-50 touch-manipulation border-t border-border bg-background pb-[env(safe-area-inset-bottom,0px)] [-webkit-tap-highlight-color:transparent] md:hidden">
           <div className="flex min-h-[4.5rem] items-end justify-between gap-0.5 px-0.5">
             <Link
               href={`${base}/documents`}
@@ -127,9 +131,37 @@ export function MobileBottomNav() {
     );
   }
 
+  // Scoped members get a minimal nav: only their data rooms plus the More
+  // sheet (for team switching). Everything else is hidden, mirroring the
+  // desktop sidebar.
+  if (isDataroomMember) {
+    return (
+      <>
+        <nav className="fixed inset-x-0 bottom-0 z-50 touch-manipulation border-t border-border bg-background pb-[env(safe-area-inset-bottom,0px)] [-webkit-tap-highlight-color:transparent] md:hidden">
+          <div className="flex min-h-[4.5rem] items-end justify-around gap-0.5 px-0.5">
+            <Link href="/datarooms" className={tabClass(isActive("datarooms"))}>
+              <ServerIcon className="h-6 w-6" />
+              <span>Data Rooms</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setMoreOpen(true)}
+              className={tabClass(!isActive("datarooms"))}
+            >
+              <MoreHorizontalIcon className="h-6 w-6" />
+              <span>More</span>
+            </button>
+          </div>
+        </nav>
+
+        <MobileMoreMenu open={moreOpen} onClose={() => setMoreOpen(false)} />
+      </>
+    );
+  }
+
   return (
     <>
-      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-background pb-[env(safe-area-inset-bottom,0px)] [-webkit-tap-highlight-color:transparent] touch-manipulation md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-50 touch-manipulation border-t border-border bg-background pb-[env(safe-area-inset-bottom,0px)] [-webkit-tap-highlight-color:transparent] md:hidden">
         <div className="flex min-h-[4.5rem] items-end justify-between gap-0.5 px-0.5">
           <Link href="/dashboard" className={tabClass(isActive("dashboard"))}>
             <HouseIcon className="h-6 w-6" />

@@ -85,51 +85,107 @@ export const sendDataroomChangeNotificationTask = schemaTask({
       return;
     }
 
-    const folderAccessCache = new Map<string, boolean>();
+    // Folder → parent map for walking a document's ancestor chain. Viewer-side
+    // visibility (getFilteredDataroomDocumentIds) treats a document as visible
+    // when any ancestor folder grants access, so checking the immediate folder
+    // alone would miss documents nested below the granted folder.
+    const folders = await prisma.dataroomFolder.findMany({
+      where: { dataroomId: payload.dataroomId },
+      select: { id: true, parentId: true },
+    });
+    const folderParentById = new Map<string, string | null>(
+      folders.map((folder) => [folder.id, folder.parentId]),
+    );
 
-    const canViewFolder = async (
+    const accessCache = new Map<string, boolean | null>();
+
+    // Reads one ACL row's canView. Returns null when no row exists so the
+    // caller can distinguish "explicitly denied" from "no explicit grant".
+    const lookupCanView = async (
       groupId: string | null | undefined,
       permissionGroupId: string | null | undefined,
-      folderId: string | null,
+      itemId: string,
+    ): Promise<boolean | null> => {
+      if (groupId) {
+        const cacheKey = `viewer-group:${groupId}:${itemId}`;
+        if (accessCache.has(cacheKey)) {
+          return accessCache.get(cacheKey)!;
+        }
+        const ac = await prisma.viewerGroupAccessControls.findUnique({
+          where: {
+            groupId_itemId: { groupId, itemId },
+          },
+          select: { canView: true },
+        });
+        const result = ac ? ac.canView : null;
+        accessCache.set(cacheKey, result);
+        return result;
+      }
+
+      if (permissionGroupId) {
+        const cacheKey = `permission-group:${permissionGroupId}:${itemId}`;
+        if (accessCache.has(cacheKey)) {
+          return accessCache.get(cacheKey)!;
+        }
+        const ac = await prisma.permissionGroupAccessControls.findUnique({
+          where: {
+            groupId_itemId: { groupId: permissionGroupId, itemId },
+          },
+          select: { canView: true },
+        });
+        const result = ac ? ac.canView : null;
+        accessCache.set(cacheKey, result);
+        return result;
+      }
+
+      return null;
+    };
+
+    // Mirrors the viewer-side visibility rules: the document's own ACL row
+    // wins (an explicit deny blocks inherited folder access); without a row
+    // the document is visible through a viewable ancestor folder anywhere up
+    // the tree. Previously this gated on the immediate folder alone, which
+    // skipped documents nested below a granted folder.
+    const canViewDocument = async (
+      groupId: string | null | undefined,
+      permissionGroupId: string | null | undefined,
+      doc: { id: string; folderId: string | null },
     ): Promise<boolean> => {
       if (!groupId && !permissionGroupId) {
         return true;
       }
 
-      if (!folderId) {
-        return true;
+      const docCanView = await lookupCanView(
+        groupId,
+        permissionGroupId,
+        doc.id,
+      );
+      if (docCanView !== null) {
+        return docCanView;
       }
 
-      if (groupId) {
-        const cacheKey = `viewer-group:${groupId}:${folderId}`;
-        if (folderAccessCache.has(cacheKey)) {
-          return folderAccessCache.get(cacheKey)!;
-        }
-        const ac = await prisma.viewerGroupAccessControls.findUnique({
-          where: {
-            groupId_itemId: { groupId, itemId: folderId },
-          },
-          select: { canView: true },
-        });
-        const result = ac?.canView === true;
-        folderAccessCache.set(cacheKey, result);
-        return result;
+      if (!doc.folderId) {
+        // Root-level document without an explicit grant is not visible.
+        return false;
       }
 
-      if (permissionGroupId) {
-        const cacheKey = `permission-group:${permissionGroupId}:${folderId}`;
-        if (folderAccessCache.has(cacheKey)) {
-          return folderAccessCache.get(cacheKey)!;
+      // Walk up the ancestor chain: the nearest folder with an explicit ACL
+      // row decides visibility (an explicit deny blocks inherited access from
+      // folders higher up). The visited guard protects against malformed
+      // parent cycles.
+      const visited = new Set<string>();
+      let currentFolderId: string | null = doc.folderId;
+      while (currentFolderId && !visited.has(currentFolderId)) {
+        visited.add(currentFolderId);
+        const folderCanView = await lookupCanView(
+          groupId,
+          permissionGroupId,
+          currentFolderId,
+        );
+        if (folderCanView !== null) {
+          return folderCanView;
         }
-        const ac = await prisma.permissionGroupAccessControls.findUnique({
-          where: {
-            groupId_itemId: { groupId: permissionGroupId, itemId: folderId },
-          },
-          select: { canView: true },
-        });
-        const result = ac?.canView === true;
-        folderAccessCache.set(cacheKey, result);
-        return result;
+        currentFolderId = folderParentById.get(currentFolderId) ?? null;
       }
 
       return false;
@@ -140,10 +196,10 @@ export const sendDataroomChangeNotificationTask = schemaTask({
         // TODO: KNOWN LIMITATION: Only the most recent view (views[0]) is checked for
         // folder access. A viewer with multiple verified links may be
         // incorrectly skipped if views[0]'s link lacks access but another
-        // link in viewer.views does grant it via canViewFolder(). The fix is
-        // to iterate over all viewer.views and pick any link where
-        // canViewFolder(link.groupId, link.permissionGroupId) returns true
-        // for dataroomDocument.folderId before deciding to skip.
+        // link in viewer.views does grant it via canViewDocument(). The fix
+        // is to iterate over all viewer.views and pick any link where
+        // canViewDocument(link.groupId, link.permissionGroupId, doc) returns
+        // true before deciding to skip.
         const view = viewer.views[0];
         const link = view?.link;
 
@@ -157,16 +213,16 @@ export const sendDataroomChangeNotificationTask = schemaTask({
 
         const accessibleDocIds: string[] = [];
         for (const doc of dataroomDocuments) {
-          const hasAccess = await canViewFolder(
+          const hasAccess = await canViewDocument(
             link.groupId,
             link.permissionGroupId,
-            doc.folderId,
+            doc,
           );
           if (hasAccess) {
             accessibleDocIds.push(doc.id);
           } else {
             logger.info(
-              "Skipping document for viewer: link group lacks folder access",
+              "Skipping document for viewer: link group lacks document access",
               {
                 viewerId: viewer.id,
                 linkId: link.id,

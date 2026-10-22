@@ -29,6 +29,13 @@ import { ItemType, Prisma } from "@prisma/client";
  * rest of the schema's `@id @default(cuid())` columns — and passed in as
  * normal bound parameters.
  *
+ * Row data is bound as one Postgres array parameter per column and expanded
+ * server-side with `unnest(...)`, so every statement uses a small constant
+ * number of bind variables no matter how many rows are in the payload.
+ * Postgres's extended protocol caps a prepared statement at 32,767 bind
+ * variables (int16), so the per-row `(VALUES ($1,$2,…),…)` shape this
+ * replaces fell over at ~6.5k rows ("too many bind variables", P2035).
+ *
  * All builders are pure functions over their inputs so we can assert their
  * shape in unit tests without spinning up Postgres.
  */
@@ -75,14 +82,15 @@ export function buildBulkUpsertPermissionsSql(
 
   // We sort by itemId so the row-lock order is stable across concurrent
   // saves for the same group — same property the previous loop relied on.
-  const sortedRows = [...rows].sort((a, b) =>
-    a.itemId.localeCompare(b.itemId),
-  );
+  const sortedRows = [...rows].sort((a, b) => a.itemId.localeCompare(b.itemId));
 
-  const valueRows = sortedRows.map(
-    (row) =>
-      Prisma.sql`(${row.id}, ${row.itemId}, ${row.itemType}::"ItemType", ${row.canView}, ${row.canDownload})`,
-  );
+  // One array bind per column (6 bind variables total, incl. groupId) —
+  // never per row — so payload size can't hit the 32,767 bind-variable cap.
+  const ids = sortedRows.map((row) => row.id);
+  const itemIds = sortedRows.map((row) => row.itemId);
+  const itemTypes = sortedRows.map((row) => row.itemType as string);
+  const canViews = sortedRows.map((row) => row.canView);
+  const canDownloads = sortedRows.map((row) => row.canDownload);
 
   return Prisma.sql`
     INSERT INTO ${tableRef(table)} (
@@ -99,13 +107,18 @@ export function buildBulkUpsertPermissionsSql(
       v."id",
       ${groupId},
       v."itemId",
-      v."itemType",
+      v."itemType"::"ItemType",
       v."canView",
       v."canDownload",
       NOW(),
       NOW()
-    FROM (VALUES ${Prisma.join(valueRows)})
-      AS v("id", "itemId", "itemType", "canView", "canDownload")
+    FROM unnest(
+      ${ids}::text[],
+      ${itemIds}::text[],
+      ${itemTypes}::text[],
+      ${canViews}::boolean[],
+      ${canDownloads}::boolean[]
+    ) AS v("id", "itemId", "itemType", "canView", "canDownload")
     ON CONFLICT ("groupId", "itemId") DO UPDATE SET
       "itemType" = EXCLUDED."itemType",
       "canView" = EXCLUDED."canView",
@@ -139,16 +152,17 @@ export function buildFindAncestorFolderIdsSql(
     return null;
   }
 
-  // Empty arrays don't bind cleanly through `= ANY($1::text[])` in every
-  // driver path, so substitute a no-match empty array literal when the
-  // input is empty.
+  // Each id list is bound as a single array parameter (2 bind variables
+  // total) instead of one variable per id. Empty arrays don't bind cleanly
+  // through `= ANY($1::text[])` in every driver path, so substitute a
+  // no-match empty array literal when the input is empty.
   const folderArray =
     visibleFolderIds.length > 0
-      ? Prisma.sql`ARRAY[${Prisma.join(visibleFolderIds)}]::text[]`
+      ? Prisma.sql`${visibleFolderIds}::text[]`
       : Prisma.sql`ARRAY[]::text[]`;
   const documentArray =
     visibleDocumentIds.length > 0
-      ? Prisma.sql`ARRAY[${Prisma.join(visibleDocumentIds)}]::text[]`
+      ? Prisma.sql`${visibleDocumentIds}::text[]`
       : Prisma.sql`ARRAY[]::text[]`;
 
   return Prisma.sql`
@@ -203,9 +217,9 @@ export function buildUpsertAncestorVisibilitySql(
     a.folderId.localeCompare(b.folderId),
   );
 
-  const valueRows = sorted.map(
-    (row) => Prisma.sql`(${row.id}, ${row.folderId})`,
-  );
+  // Array binds (3 bind variables total, incl. groupId) — see module doc.
+  const ids = sorted.map((row) => row.id);
+  const folderIds = sorted.map((row) => row.folderId);
 
   return Prisma.sql`
     INSERT INTO ${tableRef(table)} (
@@ -227,7 +241,10 @@ export function buildUpsertAncestorVisibilitySql(
       FALSE,
       NOW(),
       NOW()
-    FROM (VALUES ${Prisma.join(valueRows)}) AS v("id", "folderId")
+    FROM unnest(
+      ${ids}::text[],
+      ${folderIds}::text[]
+    ) AS v("id", "folderId")
     ON CONFLICT ("groupId", "itemId") DO UPDATE SET
       "canView" = TRUE,
       "updatedAt" = NOW()
@@ -253,13 +270,14 @@ export function buildDeletePermissionsNotInPayloadSql(
 ): Prisma.Sql | null {
   if (keepItemIds.length === 0) return null;
 
-  // Dedupe so the bound parameter list stays compact for huge payloads.
+  // Deduped and bound as one array parameter (2 bind variables total) so
+  // huge payloads can't exceed the prepared-statement bind-variable cap.
   const uniqueIds = Array.from(new Set(keepItemIds));
 
   return Prisma.sql`
     DELETE FROM ${tableRef(table)}
     WHERE "groupId" = ${groupId}
-      AND "itemId" NOT IN (${Prisma.join(uniqueIds)});
+      AND NOT ("itemId" = ANY(${uniqueIds}::text[]));
   `;
 }
 

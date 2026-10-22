@@ -10,7 +10,9 @@ import {
   SlackCredentialPublic,
 } from "@/lib/integrations/slack/types";
 import { uninstallSlackIntegration } from "@/lib/integrations/slack/uninstall";
+import { slackChannelsCacheKey } from "@/lib/integrations/slack/utils";
 import prisma from "@/lib/prisma";
+import { redis } from "@/lib/redis";
 import { CustomUser } from "@/lib/types";
 
 const channelConfigSchema = z.object({
@@ -226,6 +228,12 @@ async function handleDelete(
         },
       },
     });
+
+    try {
+      await redis.del(slackChannelsCacheKey(teamId));
+    } catch (cacheError) {
+      console.error("Slack channels cache invalidation failed:", cacheError);
+    }
 
     if (!uninstallResult.ok) {
       return res.status(200).json({

@@ -15,6 +15,9 @@ import { redis } from "@/lib/redis";
 
 const COOKIE_EXPIRATION_TIME = 23 * 60 * 60 * 1000; // 23 hours
 
+export { getLinkSessionCookieName } from "@/lib/auth/link-session-cookie";
+import { getLinkSessionCookieName } from "@/lib/auth/link-session-cookie";
+
 export const LinkSessionSchema = z.object({
   linkId: z.string(),
   documentId: z.string().optional(),
@@ -179,7 +182,7 @@ export async function verifyLinkSession(
   request: NextRequest,
   linkId: string,
 ): Promise<LinkSession | null> {
-  const sessionToken = cookies().get(`pm_ls_${linkId}`)?.value;
+  const sessionToken = cookies().get(getLinkSessionCookieName(linkId))?.value;
   const fingerprint = generateSessionFingerprint(
     collectFingerprintHeaders(request.headers),
   );
@@ -192,7 +195,9 @@ export async function verifyLinkSessionInPagesRouter(
   req: NextApiRequest,
   linkId: string,
 ): Promise<LinkSession | null> {
-  const sessionToken = parse(req.headers.cookie || "")[`pm_ls_${linkId}`];
+  const sessionToken = parse(req.headers.cookie || "")[
+    getLinkSessionCookieName(linkId)
+  ];
   const fingerprint = getFingerprintFromPagesRequest(req);
   const userAgent =
     (Array.isArray(req.headers["user-agent"])
@@ -213,7 +218,7 @@ async function deleteLinkSession(
 }
 
 export async function revokeLinkSession(linkId: string): Promise<void> {
-  const sessionToken = cookies().get(`pm_ls_${linkId}`)?.value;
+  const sessionToken = cookies().get(getLinkSessionCookieName(linkId))?.value;
   if (sessionToken) {
     const session = await redis.get(`link_session:${sessionToken}`);
     if (session) {

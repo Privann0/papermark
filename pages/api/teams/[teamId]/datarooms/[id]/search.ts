@@ -3,6 +3,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import { authOptions } from "@/pages/api/auth/[...nextauth]";
 import { getServerSession } from "next-auth/next";
 
+import { enforceDataroomMemberScope } from "@/lib/api/rbac/guard";
 import prisma from "@/lib/prisma";
 import { CustomUser } from "@/lib/types";
 
@@ -30,6 +31,11 @@ export default async function handle(
     id: string;
     query?: string;
   };
+
+  // Scoped members may only search within their assigned rooms.
+  if (await enforceDataroomMemberScope({ userId, teamId, dataroomId, res })) {
+    return;
+  }
 
   if (!query || query.trim().length === 0) {
     return res.status(200).json({ documents: [], folders: [] });

@@ -20,8 +20,9 @@ export default async function handler(
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const { key, responseContentDisposition } = req.body as {
+  const { key, expiresIn, responseContentDisposition } = req.body as {
     key: string;
+    expiresIn?: number;
     responseContentDisposition?: string;
   };
 
@@ -68,6 +69,7 @@ export default async function handler(
         },
         body: JSON.stringify({
           key,
+          ...(expiresIn ? { expiresIn } : {}),
           ...(responseContentDisposition ? { responseContentDisposition } : {}),
         }),
       },

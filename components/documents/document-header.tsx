@@ -8,6 +8,7 @@ import { DocumentAIDialog } from "@/ee/features/ai/components/document-ai-dialog
 import { PlanEnum } from "@/ee/stripe/constants";
 import { Document, DocumentVersion } from "@prisma/client";
 import {
+  ArchiveXIcon,
   ArrowRightIcon,
   BetweenHorizontalStartIcon,
   ChevronRight,
@@ -16,7 +17,9 @@ import {
   FileDownIcon,
   FileSpreadsheetIcon,
   FolderIcon,
+  FolderInputIcon,
   MoonIcon,
+  ScanEyeIcon,
   ServerIcon,
   SheetIcon,
   SunIcon,
@@ -28,6 +31,8 @@ import { toast } from "sonner";
 import { mutate } from "swr";
 
 import { getFile } from "@/lib/files/get-file";
+import { useFeatureFlags } from "@/lib/hooks/use-feature-flags";
+import { useSelfMembership } from "@/lib/hooks/use-self-membership";
 import { usePlan } from "@/lib/swr/use-billing";
 import useDataroomsSimple from "@/lib/swr/use-datarooms-simple";
 import { useTeamAI } from "@/lib/swr/use-team-ai";
@@ -60,6 +65,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 
 import PlanBadge from "../billing/plan-badge";
 import { UpgradePlanModal } from "../billing/upgrade-plan-modal";
@@ -71,6 +77,7 @@ import { AddDocumentModal } from "./add-document-modal";
 import { AddToDataroomModal } from "./add-document-to-dataroom-modal";
 import AlertBanner from "./alert";
 import { ExportVisitsModal } from "./export-visits-modal";
+import { MoveToFolderModal } from "./move-folder-modal";
 
 export default function DocumentHeader({
   prismaDocument,
@@ -78,26 +85,43 @@ export default function DocumentHeader({
   teamId,
   actions,
   onBulkImportLinks,
+  dataroomId,
+  dataroomDocumentId,
 }: {
   prismaDocument: DocumentWithVersion;
   primaryVersion: DocumentVersion;
   teamId: string;
   actions?: React.ReactNode[];
   onBulkImportLinks?: () => void;
+  /**
+   * When the header is rendered inside a data room (the dataroom document
+   * page), these identify the DataroomDocument so dataroom members can remove
+   * it from the room instead of deleting the underlying document.
+   */
+  dataroomId?: string;
+  dataroomDocumentId?: string;
 }) {
   const router = useRouter();
   const teamInfo = useTeam();
   const { datarooms } = useDataroomsSimple();
+  const { isDataroomMember } = useSelfMembership();
+  // Data room members may only remove a document from the room, never delete
+  // the underlying document. Requires the dataroom context to be provided.
+  const canRemoveFromDataroom = Boolean(dataroomId && dataroomDocumentId);
+  const showRemoveFromDataroom = isDataroomMember && canRemoveFromDataroom;
   const { theme, systemTheme } = useTheme();
   const isLight =
     theme === "light" || (theme === "system" && systemTheme === "light");
   const { isPro, isFree, isTrial, isBusiness, isDatarooms } = usePlan();
   const { canUseAI, isAIEnabled } = useTeamAI();
+  const { isFeatureEnabled } = useFeatureFlags();
   const [isEditingName, setIsEditingName] = useState<boolean>(false);
+  const [nameDraft, setNameDraft] = useState<string>("");
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const [isFirstClick, setIsFirstClick] = useState<boolean>(false);
   const [orientationLoading, setOrientationLoading] = useState<boolean>(false);
   const [addDataRoomOpen, setAddDataRoomOpen] = useState<boolean>(false);
+  const [moveFolderOpen, setMoveFolderOpen] = useState<boolean>(false);
   const [addDocumentVersion, setAddDocumentVersion] = useState<boolean>(false);
   const [openAddDocModal, setOpenAddDocModal] = useState<boolean>(false);
   const [planModalOpen, setPlanModalOpen] = useState<boolean>(false);
@@ -105,8 +129,8 @@ export default function DocumentHeader({
   const [selectedPlan, setSelectedPlan] = useState<PlanEnum>(PlanEnum.Pro);
   const [exportModalOpen, setExportModalOpen] = useState<boolean>(false);
   const [aiDialogOpen, setAiDialogOpen] = useState<boolean>(false);
-  const nameRef = useRef<HTMLHeadingElement>(null);
-  const enterPressedRef = useRef<boolean>(false);
+  const skipNameSubmitRef = useRef<boolean>(false);
+  const savingNameRef = useRef<boolean>(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   const actionRows: React.ReactNode[][] = [];
@@ -155,51 +179,146 @@ export default function DocumentHeader({
     }
   }, [addDataRoomOpen, addDocumentVersion]);
 
-  const handleNameSubmit = async () => {
-    if (enterPressedRef.current) {
-      enterPressedRef.current = false;
-      return;
-    }
-    if (nameRef.current && isEditingName) {
-      const newName = nameRef.current.innerText;
+  const startEditingName = () => {
+    skipNameSubmitRef.current = false;
+    setNameDraft(prismaDocument.name);
+    setIsEditingName(true);
+  };
 
-      if (newName !== prismaDocument!.name) {
-        const response = await fetch(
-          `/api/teams/${teamId}/documents/${prismaDocument!.id}/update-name`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              name: newName,
-            }),
-          },
-        );
+  const refreshDocumentNameCaches = (newName: string) => {
+    const encodedDocumentId = encodeURIComponent(prismaDocument.id);
 
-        if (response.ok) {
-          const { message } = await response.json();
-          toast.success(message);
-        } else {
-          const { message } = await response.json();
-          toast.error(message);
-        }
-      }
-      setIsEditingName(false);
+    mutate(
+      `/api/teams/${teamId}/documents/${encodedDocumentId}`,
+      (current: DocumentWithVersion | undefined) =>
+        current ? { ...current, name: newName } : current,
+      { revalidate: true },
+    );
+    mutate(
+      `/api/teams/${teamId}/documents/${encodedDocumentId}/overview`,
+      (current: { document?: DocumentWithVersion } | undefined) =>
+        current?.document
+          ? {
+              ...current,
+              document: { ...current.document, name: newName },
+            }
+          : current,
+      { revalidate: true },
+    );
+
+    if (dataroomId && dataroomDocumentId) {
+      mutate(
+        `/api/teams/${teamId}/datarooms/${dataroomId}/documents/${encodeURIComponent(
+          dataroomDocumentId,
+        )}/overview`,
+        (
+          current:
+            | {
+                document?: DocumentWithVersion;
+              }
+            | undefined,
+        ) =>
+          current?.document
+            ? {
+                ...current,
+                document: { ...current.document, name: newName },
+              }
+            : current,
+        { revalidate: true },
+      );
     }
   };
 
-  const preventEnterAndSubmit = (
-    event: React.KeyboardEvent<HTMLHeadingElement>,
-  ) => {
-    if (event.key === "Enter") {
-      event.preventDefault(); // Prevent the default line break
-      setIsEditingName(true);
-      enterPressedRef.current = true;
-      handleNameSubmit(); // Handle the submit
-      if (nameRef.current) {
-        nameRef.current.blur(); // Remove focus from the h2 element
+  const parseErrorMessage = async (response: Response) => {
+    const fallback = "Failed to update document name";
+    const raw = await response.text();
+    if (!raw) return fallback;
+
+    try {
+      const data = JSON.parse(raw) as { error?: string; message?: string };
+      return data.error || data.message || fallback;
+    } catch {
+      return raw;
+    }
+  };
+
+  const handleNameSubmit = async () => {
+    if (!isEditingName || savingNameRef.current) return;
+
+    const newName = nameDraft.trim();
+    if (!newName) {
+      setNameDraft(prismaDocument.name);
+      setIsEditingName(false);
+      toast.error("Document name is required");
+      return;
+    }
+
+    if (newName === prismaDocument.name) {
+      setIsEditingName(false);
+      return;
+    }
+
+    savingNameRef.current = true;
+    setIsEditingName(false);
+
+    try {
+      const response = await fetch(
+        `/api/teams/${teamId}/documents/${prismaDocument.id}/update-name`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: newName,
+          }),
+        },
+      );
+
+      if (response.ok) {
+        let message = "Document name updated!";
+        try {
+          const data = (await response.json()) as { message?: string };
+          if (data.message) message = data.message;
+        } catch {
+          // keep fallback success message
+        }
+        toast.success(message);
+        refreshDocumentNameCaches(newName);
+      } else {
+        toast.error(await parseErrorMessage(response));
+        setNameDraft(prismaDocument.name);
       }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update document name",
+      );
+      setNameDraft(prismaDocument.name);
+    } finally {
+      savingNameRef.current = false;
+    }
+  };
+
+  const handleNameBlur = () => {
+    if (skipNameSubmitRef.current) {
+      skipNameSubmitRef.current = false;
+      return;
+    }
+    void handleNameSubmit();
+  };
+
+  const handleNameKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      if (event.nativeEvent.isComposing) return;
+      event.preventDefault();
+      void handleNameSubmit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      skipNameSubmitRef.current = true;
+      setNameDraft(prismaDocument.name);
+      setIsEditingName(false);
     }
   };
 
@@ -462,6 +581,45 @@ export default function DocumentHeader({
     );
   };
 
+  const handleRemoveFromDataroom = async () => {
+    if (!dataroomId || !dataroomDocumentId) return;
+
+    toast.promise(
+      fetch(
+        `/api/teams/${teamId}/datarooms/${dataroomId}/documents/${dataroomDocumentId}`,
+        {
+          method: "DELETE",
+        },
+      ).then(async (res) => {
+        if (!res.ok) {
+          const error = await res.json().catch(() => ({}));
+          throw new Error(error.message || "Failed to remove document");
+        }
+        setIsFirstClick(false);
+        setMenuOpen(false);
+        router.push(`/datarooms/${dataroomId}/documents`);
+      }),
+      {
+        loading: "Removing document...",
+        success: "Document removed from data room.",
+        error: (err) => err.message || "Failed to remove document. Try again.",
+      },
+    );
+  };
+
+  const handleRemoveButtonClick = (event: any) => {
+    event.stopPropagation();
+    event.preventDefault();
+
+    if (isFirstClick) {
+      handleRemoveFromDataroom();
+      setIsFirstClick(false);
+      setMenuOpen(false);
+    } else {
+      setIsFirstClick(true);
+    }
+  };
+
   const handleMenuStateChange = (open: boolean) => {
     if (isFirstClick) {
       setMenuOpen(true); // Keep the dropdown open on the first click
@@ -538,20 +696,34 @@ export default function DocumentHeader({
           })}
 
           <div className="mt-1 flex min-w-0 flex-col lg:mt-0">
-            <h2
-              className="truncate rounded-md border border-transparent px-1 py-0.5 text-base font-semibold tracking-tight text-foreground duration-200 hover:cursor-text hover:border hover:border-border focus-visible:text-base sm:text-lg sm:focus-visible:text-lg lg:px-3 lg:py-1 lg:text-xl lg:focus-visible:text-xl xl:text-2xl"
-              ref={nameRef}
-              contentEditable={true}
-              onFocus={() => setIsEditingName(true)}
-              onBlur={handleNameSubmit}
-              onKeyDown={preventEnterAndSubmit}
-              title="Click to edit"
-              dangerouslySetInnerHTML={{ __html: prismaDocument.name }}
-            />
-            {isEditingName && (
-              <span className="mt-1 text-xs text-muted-foreground">
-                {`Press <Enter> to save the name.`}
-              </span>
+            {isEditingName ? (
+              <>
+                <Input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onBlur={handleNameBlur}
+                  onKeyDown={handleNameKeyDown}
+                  aria-label="Document name"
+                  className="h-auto truncate rounded-md border border-border px-1 py-0.5 text-base font-semibold tracking-tight text-foreground sm:text-lg lg:px-3 lg:py-1 lg:text-xl xl:text-2xl"
+                />
+                <span className="mt-1 text-xs text-muted-foreground">
+                  Press Enter to save, Esc to cancel.
+                </span>
+              </>
+            ) : (
+              <h2 className="min-w-0">
+                <button
+                  type="button"
+                  onClick={startEditingName}
+                  title="Click to edit"
+                  aria-label={`Rename ${prismaDocument.name}`}
+                  className="w-full truncate rounded-md border border-transparent px-1 py-0.5 text-left text-base font-semibold tracking-tight text-foreground duration-200 hover:cursor-text hover:border hover:border-border sm:text-lg lg:px-3 lg:py-1 lg:text-xl xl:text-2xl"
+                >
+                  {prismaDocument.name}
+                </button>
+              </h2>
             )}
           </div>
 
@@ -607,6 +779,7 @@ export default function DocumentHeader({
             primaryVersion.type !== "link" && (
               <AddDocumentModal
                 newVersion
+                documentId={prismaDocument.id}
                 openModal={openAddDocModal}
                 setAddDocumentModalOpen={setOpenAddDocModal}
               >
@@ -696,6 +869,7 @@ export default function DocumentHeader({
                     <DropdownMenuItem>
                       <AddDocumentModal
                         newVersion
+                        documentId={prismaDocument.id}
                         setAddDocumentModalOpen={setAddDocumentVersion}
                       >
                         <button
@@ -731,6 +905,19 @@ export default function DocumentHeader({
                       : "Enable Advanced Mode"}
                   </DropdownMenuItem>
                 )}
+              {!dataroomId && !isDataroomMember && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    setIsFirstClick(false);
+                    setMenuOpen(false);
+                    setMoveFolderOpen(true);
+                  }}
+                >
+                  <FolderInputIcon className="mr-2 h-4 w-4" />
+                  Move to folder
+                </DropdownMenuItem>
+              )}
+
               {datarooms && datarooms.length !== 0 && (
                 <DropdownMenuItem onClick={() => setAddDataRoomOpen(true)}>
                   <BetweenHorizontalStartIcon className="mr-2 h-4 w-4" />
@@ -846,8 +1033,7 @@ export default function DocumentHeader({
 
               {/* Download latest version */}
               {primaryVersion.type !== "notion" &&
-                primaryVersion.type !== "link" &&
-                primaryVersion.type !== "video" && (
+                primaryVersion.type !== "link" && (
                   <DropdownMenuItem
                     onClick={() => downloadDocument(primaryVersion)}
                   >
@@ -858,13 +1044,29 @@ export default function DocumentHeader({
 
               <DropdownMenuSeparator />
 
-              <DropdownMenuItem
-                className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
-                onClick={(event) => handleButtonClick(event, prismaDocument.id)}
-              >
-                <TrashIcon className="mr-2 h-4 w-4" />
-                {isFirstClick ? "Really delete?" : "Delete document"}
-              </DropdownMenuItem>
+              {isDataroomMember ? (
+                // Data room members can only remove a document from the room,
+                // never delete the underlying document for the whole team.
+                showRemoveFromDataroom ? (
+                  <DropdownMenuItem
+                    className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                    onClick={handleRemoveButtonClick}
+                  >
+                    <ArchiveXIcon className="mr-2 h-4 w-4" />
+                    {isFirstClick ? "Really remove?" : "Remove from data room"}
+                  </DropdownMenuItem>
+                ) : null
+              ) : (
+                <DropdownMenuItem
+                  className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                  onClick={(event) =>
+                    handleButtonClick(event, prismaDocument.id)
+                  }
+                >
+                  <TrashIcon className="mr-2 h-4 w-4" />
+                  {isFirstClick ? "Really delete?" : "Delete document"}
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1010,6 +1212,16 @@ export default function DocumentHeader({
           setOpen={setAddDataRoomOpen}
           documentId={prismaDocument.id}
           documentName={prismaDocument.name}
+        />
+      ) : null}
+
+      {moveFolderOpen ? (
+        <MoveToFolderModal
+          open={moveFolderOpen}
+          setOpen={setMoveFolderOpen}
+          documentIds={[prismaDocument.id]}
+          itemName={prismaDocument.name}
+          folderParentId={prismaDocument.folderId!}
         />
       ) : null}
 

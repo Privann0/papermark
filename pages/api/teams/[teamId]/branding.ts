@@ -1,31 +1,37 @@
 import { NextApiRequest, NextApiResponse } from "next";
 
-import { del } from "@vercel/blob";
-import { getServerSession } from "next-auth";
+import {
+  type DataroomCardLayout,
+  DataroomCardLayoutSchema,
+  type DataroomViewerHeaderStyle,
+  DataroomViewerHeaderStyleSchema,
+  type DataroomViewerLayoutPreset,
+  DataroomViewerLayoutPresetSchema,
+} from "@/ee/features/branding/lib/dataroom-viewer-layout";
+import { deleteTeamBrand } from "@/ee/features/branding/lib/delete-team-brand";
+import {
+  findDefaultBrand,
+  persistDefaultBrand,
+} from "@/ee/features/branding/lib/resolve-base-brand";
 import { z } from "zod";
 
-import {
-  DataroomCardLayoutSchema,
-  DataroomViewerHeaderStyleSchema,
-  DataroomViewerLayoutPresetSchema,
-  type DataroomCardLayout,
-  type DataroomViewerHeaderStyle,
-  type DataroomViewerLayoutPreset,
-} from "@/ee/features/branding/lib/dataroom-viewer-layout";
+import { withTeamApi } from "@/lib/api/auth/with-session-team";
+import { validateRedirectUrl } from "@/lib/api/domains/validate-redirect-url";
 import {
   teamPlanAllowsCustomWelcomeAndCta,
   teamPlanAllowsLayoutCustomization,
 } from "@/lib/billing/team-plan-custom-messaging";
-import { validateRedirectUrl } from "@/lib/api/domains/validate-redirect-url";
-import { errorhandler } from "@/lib/errorHandler";
+import { getFeatureFlags } from "@/lib/featureFlags";
 import prisma from "@/lib/prisma";
-import { redis } from "@/lib/redis";
-import { CustomUser } from "@/lib/types";
-
-import { authOptions } from "../../auth/[...nextauth]";
+import {
+  clearCachedBrandLogo,
+  writeCachedBrandLogo,
+} from "@/lib/redis/brand-logo-cache";
 
 const updateBrandingSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
   logo: z.string().nullable().optional(),
+  hideLogo: z.boolean().optional(),
   banner: z.string().nullable().optional(),
   brandColor: z.string().nullable().optional(),
   accentColor: z.string().nullable().optional(),
@@ -39,6 +45,7 @@ const updateBrandingSchema = z.object({
   linkPreviewFavicon: z.string().nullable().optional(),
   ctaLabel: z.string().nullable().optional(),
   ctaUrl: z.string().nullable().optional(),
+  privacyPolicyUrl: z.string().nullable().optional(),
   cardLayout: DataroomCardLayoutSchema.optional(),
   showFolderTree: z.boolean().optional(),
   viewerLayoutPreset: DataroomViewerLayoutPresetSchema.optional(),
@@ -90,75 +97,51 @@ function sanitizeLayoutPayload(input: LayoutPayload): LayoutPayload {
   return out;
 }
 
-function maybeDeleteBlobAsset(url: string | null | undefined): Promise<void> {
-  if (!url || url === "no-banner") return Promise.resolve();
-  if (url.startsWith("/") || url.startsWith("data:")) return Promise.resolve();
-  return del(url).catch(() => {});
+// Returns `undefined` to leave the stored value untouched (Prisma skips it).
+async function resolvePrivacyPolicyUrl(
+  teamId: string,
+  value: string | null | undefined,
+): Promise<
+  { ok: true; url: string | null | undefined } | { ok: false; message: string }
+> {
+  const featureFlags = await getFeatureFlags({ teamId });
+  if (!featureFlags.customPrivacyUrl || value === undefined) {
+    return { ok: true, url: undefined };
+  }
+
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return { ok: true, url: null };
+  }
+
+  const validation = await validateRedirectUrl(trimmed, teamId);
+  if (!validation.valid) {
+    return {
+      ok: false,
+      message: validation.message.replace("Redirect URL", "Privacy policy URL"),
+    };
+  }
+
+  return { ok: true, url: validation.url || null };
 }
 
-export default async function handle(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
-  const session = await getServerSession(req, res, authOptions);
-  if (!session) {
-    return res.status(401).end("Unauthorized");
-  }
-
-  const { teamId } = req.query as { teamId: string };
-
-  try {
-    const team = await prisma.team.findUnique({
-      where: {
-        id: teamId,
-      },
-      select: {
-        id: true,
-        users: { select: { userId: true } },
-      },
-    });
-
-    // check that the user is member of the team, otherwise return 403
-    const teamUsers = team?.users;
-    const isUserPartOfTeam = teamUsers?.some(
-      (user) => user.userId === (session.user as CustomUser).id,
-    );
-    if (!isUserPartOfTeam) {
-      return res.status(403).end("Unauthorized to access this team");
-    }
-  } catch (error) {
-    errorhandler(error, res);
-  }
-
-  if (req.method === "GET") {
-    // GET /api/teams/:teamId/branding
-    const brand = await prisma.brand.findUnique({
-      where: {
-        teamId: teamId,
-      },
-    });
+const getHandler = withTeamApi(
+  async ({ res, teamId }) => {
+    const brand = await findDefaultBrand(teamId);
 
     if (!brand) {
       return res.status(200).json(null);
     }
 
     return res.status(200).json(brand);
-  } else if (req.method === "POST") {
-    // POST /api/teams/:teamId/branding
-    const teamAuth = await prisma.team.findFirst({
-      where: {
-        id: teamId,
-        users: {
-          some: { userId: (session.user as CustomUser).id },
-        },
-      },
-      select: { plan: true },
-    });
-    if (!teamAuth) {
-      return res.status(403).end("Unauthorized to access this team");
-    }
-    const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(teamAuth.plan);
-    const layoutAllowed = teamPlanAllowsLayoutCustomization(teamAuth.plan);
+  },
+  { requiredPermissions: ["branding.read"] },
+);
+
+const postHandler = withTeamApi(
+  async ({ req, res, teamId, team }) => {
+    const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(team.plan);
+    const layoutAllowed = teamPlanAllowsLayoutCustomization(team.plan);
 
     const parsed = updateBrandingSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -192,49 +175,62 @@ export default async function handle(
       validatedCtaUrl = ctaValidation.url;
     }
 
-    // Use upsert so POST is idempotent: clients can hit POST even when a
-    // Brand row already exists (e.g. SWR cache is stale and `brand` is
-    // falsy on the client) without tripping the unique-teamId constraint.
-    const brand = await prisma.brand.upsert({
-      where: { teamId },
+    const privacyPolicy = await resolvePrivacyPolicyUrl(
+      teamId,
+      body.privacyPolicyUrl,
+    );
+    if (!privacyPolicy.ok) {
+      return res.status(400).json({ message: privacyPolicy.message });
+    }
+
+    const brand = await persistDefaultBrand({
+      teamId,
       create: {
+        name: body.name ?? "Default",
         logo: body.logo,
+        hideLogo: body.hideLogo ?? false,
         banner: body.banner,
         brandColor: body.brandColor,
         accentColor: body.accentColor,
         accentButtonColor: body.accentButtonColor ?? undefined,
         applyAccentColorToDataroomView:
           body.applyAccentColorToDataroomView ?? false,
-        welcomeMessage: messagingAllowed ? body.welcomeMessage ?? null : null,
+        welcomeMessage: messagingAllowed ? (body.welcomeMessage ?? null) : null,
         customLinkPreviewEnabled: messagingAllowed
-          ? body.customLinkPreviewEnabled ?? false
+          ? (body.customLinkPreviewEnabled ?? false)
           : false,
         linkPreviewTitle: messagingAllowed
-          ? body.linkPreviewTitle ?? undefined
+          ? (body.linkPreviewTitle ?? undefined)
           : undefined,
         linkPreviewDescription: messagingAllowed
-          ? body.linkPreviewDescription ?? undefined
+          ? (body.linkPreviewDescription ?? undefined)
           : undefined,
         linkPreviewImage: messagingAllowed
-          ? body.linkPreviewImage ?? undefined
+          ? (body.linkPreviewImage ?? undefined)
           : undefined,
         linkPreviewFavicon: messagingAllowed
-          ? body.linkPreviewFavicon ?? undefined
+          ? (body.linkPreviewFavicon ?? undefined)
           : undefined,
-        ctaLabel: messagingAllowed ? body.ctaLabel ?? undefined : undefined,
-        ctaUrl: messagingAllowed ? validatedCtaUrl ?? undefined : undefined,
+        ctaLabel: messagingAllowed ? (body.ctaLabel ?? undefined) : undefined,
+        ctaUrl: messagingAllowed ? (validatedCtaUrl ?? undefined) : undefined,
+        privacyPolicyUrl: privacyPolicy.url ?? undefined,
         ...layoutData,
         teamId: teamId,
       },
       update: {
+        name: body.name,
         logo: body.logo,
+        hideLogo: body.hideLogo,
         banner: body.banner,
         brandColor: body.brandColor,
         accentColor: body.accentColor,
         accentButtonColor: body.accentButtonColor ?? null,
         applyAccentColorToDataroomView:
           body.applyAccentColorToDataroomView ?? false,
-        welcomeMessage: messagingAllowed ? body.welcomeMessage ?? null : undefined,
+        welcomeMessage: messagingAllowed
+          ? (body.welcomeMessage ?? null)
+          : undefined,
+        privacyPolicyUrl: privacyPolicy.url,
         customLinkPreviewEnabled: messagingAllowed
           ? body.customLinkPreviewEnabled
           : undefined,
@@ -252,29 +248,17 @@ export default async function handle(
       },
     });
 
-    if (body.logo) {
-      await redis.set(`brand:logo:${teamId}`, body.logo);
-    } else if (body.logo === null) {
-      await redis.del(`brand:logo:${teamId}`);
-    }
+    await writeCachedBrandLogo(teamId, brand);
 
     return res.status(200).json(brand);
-  } else if (req.method === "PUT") {
-    // PUT /api/teams/:teamId/branding
-    const teamAuth = await prisma.team.findFirst({
-      where: {
-        id: teamId,
-        users: {
-          some: { userId: (session.user as CustomUser).id },
-        },
-      },
-      select: { plan: true },
-    });
-    if (!teamAuth) {
-      return res.status(403).end("Unauthorized to access this team");
-    }
-    const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(teamAuth.plan);
-    const layoutAllowed = teamPlanAllowsLayoutCustomization(teamAuth.plan);
+  },
+  { requiredPermissions: ["branding.write"] },
+);
+
+const putHandler = withTeamApi(
+  async ({ req, res, teamId, team }) => {
+    const messagingAllowed = teamPlanAllowsCustomWelcomeAndCta(team.plan);
+    const layoutAllowed = teamPlanAllowsLayoutCustomization(team.plan);
 
     const parsed = updateBrandingSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -285,9 +269,7 @@ export default async function handle(
     }
     const body = parsed.data;
 
-    const existingBrand = await prisma.brand.findUnique({
-      where: { teamId },
-    });
+    const existingBrand = await findDefaultBrand(teamId);
 
     let validatedCtaUrl: string | null | undefined = body.ctaUrl;
     if (messagingAllowed && typeof body.ctaUrl === "string") {
@@ -298,14 +280,22 @@ export default async function handle(
       validatedCtaUrl = ctaValidation.url;
     }
 
+    const privacyPolicy = await resolvePrivacyPolicyUrl(
+      teamId,
+      body.privacyPolicyUrl,
+    );
+    if (!privacyPolicy.ok) {
+      return res.status(400).json({ message: privacyPolicy.message });
+    }
+
     const resolvedWelcome = messagingAllowed
-      ? body.welcomeMessage ?? null
+      ? body.welcomeMessage
       : (existingBrand?.welcomeMessage ?? null);
     const resolvedCtaLabel = messagingAllowed
-      ? body.ctaLabel ?? null
+      ? body.ctaLabel
       : (existingBrand?.ctaLabel ?? null);
     const resolvedCtaUrl = messagingAllowed
-      ? validatedCtaUrl ?? null
+      ? validatedCtaUrl
       : (existingBrand?.ctaUrl ?? null);
 
     const layoutData = layoutAllowed
@@ -318,46 +308,50 @@ export default async function handle(
         })
       : {};
 
-    const brand = await prisma.brand.upsert({
-      where: {
-        teamId: teamId,
-      },
+    const brand = await persistDefaultBrand({
+      teamId,
       create: {
+        name: body.name ?? "Default",
         logo: body.logo,
+        hideLogo: body.hideLogo ?? false,
         banner: body.banner,
         brandColor: body.brandColor,
         accentColor: body.accentColor,
         accentButtonColor: body.accentButtonColor ?? undefined,
         applyAccentColorToDataroomView: !!body.applyAccentColorToDataroomView,
-        welcomeMessage: messagingAllowed ? body.welcomeMessage ?? null : null,
+        welcomeMessage: messagingAllowed ? (body.welcomeMessage ?? null) : null,
         customLinkPreviewEnabled: messagingAllowed
           ? !!body.customLinkPreviewEnabled
           : false,
         linkPreviewTitle: messagingAllowed
-          ? body.linkPreviewTitle ?? undefined
+          ? (body.linkPreviewTitle ?? undefined)
           : undefined,
         linkPreviewDescription: messagingAllowed
-          ? body.linkPreviewDescription ?? undefined
+          ? (body.linkPreviewDescription ?? undefined)
           : undefined,
         linkPreviewImage: messagingAllowed
-          ? body.linkPreviewImage ?? undefined
+          ? (body.linkPreviewImage ?? undefined)
           : undefined,
         linkPreviewFavicon: messagingAllowed
-          ? body.linkPreviewFavicon ?? undefined
+          ? (body.linkPreviewFavicon ?? undefined)
           : undefined,
-        ctaLabel: messagingAllowed ? body.ctaLabel ?? undefined : undefined,
-        ctaUrl: messagingAllowed ? validatedCtaUrl ?? undefined : undefined,
+        ctaLabel: messagingAllowed ? (body.ctaLabel ?? undefined) : undefined,
+        ctaUrl: messagingAllowed ? (validatedCtaUrl ?? undefined) : undefined,
+        privacyPolicyUrl: privacyPolicy.url ?? undefined,
         ...layoutData,
         teamId: teamId,
       },
       update: {
+        name: body.name,
         logo: body.logo,
+        hideLogo: body.hideLogo,
         banner: body.banner,
         brandColor: body.brandColor,
         accentColor: body.accentColor,
         accentButtonColor: body.accentButtonColor ?? null,
         applyAccentColorToDataroomView: !!body.applyAccentColorToDataroomView,
         welcomeMessage: resolvedWelcome,
+        privacyPolicyUrl: privacyPolicy.url,
         // Preserve stored link-preview settings on partial PUTs: only write
         // these fields when they're explicitly present in the payload.
         // Prisma skips updates for `undefined` values. Plans without messaging
@@ -380,44 +374,49 @@ export default async function handle(
       },
     });
 
-    // Update logo in Redis cache
-    if (body.logo) {
-      await redis.set(`brand:logo:${teamId}`, body.logo);
-    } else {
-      // If logo is null or undefined, delete the cache
-      await redis.del(`brand:logo:${teamId}`);
-    }
+    await writeCachedBrandLogo(teamId, brand);
 
     return res.status(200).json(brand);
-  } else if (req.method === "DELETE") {
-    // DELETE /api/teams/:teamId/branding
-    const brand = await prisma.brand.findFirst({
-      where: {
-        teamId: teamId,
-      },
-      select: { id: true, logo: true, banner: true, linkPreviewImage: true, linkPreviewFavicon: true },
-    });
+  },
+  { requiredPermissions: ["branding.write"] },
+);
+
+const deleteHandler = withTeamApi(
+  async ({ res, teamId }) => {
+    const brand = await findDefaultBrand(teamId);
 
     if (brand) {
-      await Promise.all([
-        maybeDeleteBlobAsset(brand.logo),
-        maybeDeleteBlobAsset(brand.banner),
-        maybeDeleteBlobAsset((brand as any).linkPreviewImage),
-        maybeDeleteBlobAsset((brand as any).linkPreviewFavicon),
-      ]);
+      await deleteTeamBrand({ teamId, brand });
+    } else {
+      await prisma.team.update({
+        where: { id: teamId },
+        data: { defaultBrandId: null },
+      });
+      await clearCachedBrandLogo(teamId);
     }
 
-    await prisma.brand.deleteMany({
-      where: { teamId },
-    });
-
-    // Remove logo from Redis cache
-    await redis.del(`brand:logo:${teamId}`);
-
     return res.status(204).end();
-  } else {
-    // We only allow GET and DELETE requests
-    res.setHeader("Allow", ["GET", "POST", "PUT", "DELETE"]);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+  },
+  { requiredPermissions: ["branding.write"] },
+);
+
+export default async function handle(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
+  if (req.method === "GET") {
+    return getHandler(req, res);
   }
+  if (req.method === "POST") {
+    return postHandler(req, res);
+  }
+  if (req.method === "PUT") {
+    return putHandler(req, res);
+  }
+  if (req.method === "DELETE") {
+    return deleteHandler(req, res);
+  }
+
+  res.setHeader("Allow", ["GET", "POST", "PUT", "DELETE"]);
+  return res.status(405).end(`Method ${req.method} Not Allowed`);
 }

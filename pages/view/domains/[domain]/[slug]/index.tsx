@@ -4,7 +4,6 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
 import WorkflowAccessView from "@/ee/features/workflows/components/workflow-access-view";
-import NotFound from "@/pages/404";
 import { Brand, DataroomBrand } from "@prisma/client";
 import Cookies from "js-cookie";
 import { useSession } from "next-auth/react";
@@ -14,6 +13,11 @@ import z from "zod";
 
 import { fetchLinkDataByDomainSlug } from "@/lib/api/links/link-data";
 import { getFeatureFlags } from "@/lib/featureFlags";
+import { useUrlPasscode } from "@/lib/hooks/use-url-passcode";
+import {
+  type ViewerI18nPageProps,
+  buildViewerI18nPageProps,
+} from "@/lib/i18n/viewer-page-props";
 import notion from "@/lib/notion";
 import {
   addSignedUrls,
@@ -31,6 +35,8 @@ import LoadingSpinner from "@/components/ui/loading-spinner";
 import CustomMetaTag from "@/components/view/custom-metatag";
 import DataroomView from "@/components/view/dataroom/dataroom-view";
 import DocumentView from "@/components/view/document-view";
+import { ViewerI18nProvider } from "@/components/view/viewer-i18n-provider";
+import { ViewerNotFound } from "@/components/view/viewer-not-found";
 
 type DocumentLinkData = {
   linkType: "DOCUMENT_LINK";
@@ -93,6 +99,8 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
       };
     }
 
+    const i18nProps = await buildViewerI18nPageProps(brand as any);
+
     // Handle workflow links - minimal props needed
     if (linkType === "WORKFLOW_LINK") {
       return {
@@ -120,8 +128,9 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
           showPoweredByBanner: false,
           showAccountCreationSlide: false,
           useAdvancedExcelViewer: false,
-          useCustomAccessForm: false,
+          hideFooterOnAccessForm: false,
           logoOnAccessForm: false,
+          ...i18nProps,
         },
         revalidate: 60,
       };
@@ -167,8 +176,13 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
       const teamPlan = team?.plan || "free";
 
       // Check feature flags for document links
-      const docFeatureFlags = await getFeatureFlags({ teamId: teamId || undefined });
+      const docFeatureFlags = await getFeatureFlags({
+        teamId: teamId || undefined,
+      });
       const textSelectionEnabled = docFeatureFlags.textSelection;
+      const logoOnAccessFormEnabled = docFeatureFlags.logoOnAccessForm;
+      const hideFooterOnAccessFormEnabled =
+        docFeatureFlags.hideFooterOnAccessForm;
 
       return {
         props: {
@@ -199,16 +213,10 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
           },
           showAccountCreationSlide: link.showBanner || teamPlan === "free",
           useAdvancedExcelViewer: advancedExcelEnabled,
-          useCustomAccessForm:
-            teamId === "cm0154tiv0000lr2t6nr5c6kp" ||
-            teamId === "clup33by90000oewh4rfvp2eg" ||
-            teamId === "cm76hfyvy0002q623hmen99pf" ||
-            teamId === "cm9ztf0s70005js04i689gefn" ||
-            teamId === "cmk2hnmqh0000k304zcoezt6n",
-          logoOnAccessForm:
-            teamId === "cm7nlkrhm0000qgh0nvyrrywr" ||
-            teamId === "clup33by90000oewh4rfvp2eg",
+          hideFooterOnAccessForm: hideFooterOnAccessFormEnabled,
+          logoOnAccessForm: logoOnAccessFormEnabled,
           textSelectionEnabled,
+          ...i18nProps,
         },
         revalidate: 10,
       };
@@ -246,6 +254,8 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
       const dataroomIndexEnabled =
         result.dataroomIndexEnabledForViewer ?? false;
       const textSelectionEnabled = featureFlags.textSelection;
+      const logoOnAccessFormEnabled = featureFlags.logoOnAccessForm;
+      const hideFooterOnAccessFormEnabled = featureFlags.hideFooterOnAccessForm;
 
       const lastUpdatedAt = link.dataroom.documents.reduce(
         (max: number, doc: any) => {
@@ -283,17 +293,11 @@ export const getStaticProps = async (context: GetStaticPropsContext) => {
           showPoweredByBanner: false,
           showAccountCreationSlide: false,
           useAdvancedExcelViewer: false, // INFO: this is managed in the API route
-          useCustomAccessForm:
-            teamId === "cm0154tiv0000lr2t6nr5c6kp" ||
-            teamId === "clup33by90000oewh4rfvp2eg" ||
-            teamId === "cm76hfyvy0002q623hmen99pf" ||
-            teamId === "cm9ztf0s70005js04i689gefn" ||
-            teamId === "cmk2hnmqh0000k304zcoezt6n",
-          logoOnAccessForm:
-            teamId === "cm7nlkrhm0000qgh0nvyrrywr" ||
-            teamId === "clup33by90000oewh4rfvp2eg",
+          hideFooterOnAccessForm: hideFooterOnAccessFormEnabled,
+          logoOnAccessForm: logoOnAccessFormEnabled,
           dataroomIndexEnabled,
           textSelectionEnabled,
+          ...i18nProps,
         },
         revalidate: 10,
       };
@@ -312,19 +316,7 @@ export async function getStaticPaths() {
   };
 }
 
-export default function ViewPage({
-  frozen,
-  linkData,
-  notionData,
-  meta,
-  showAccountCreationSlide,
-  useAdvancedExcelViewer,
-  useCustomAccessForm,
-  logoOnAccessForm,
-  dataroomIndexEnabled,
-  textSelectionEnabled,
-  error,
-}: {
+type DomainViewPageProps = Partial<ViewerI18nPageProps> & {
   frozen?: boolean;
   linkData: DocumentLinkData | DataroomLinkData | WorkflowLinkData;
   notionData: {
@@ -342,16 +334,31 @@ export default function ViewPage({
   };
   showAccountCreationSlide: boolean;
   useAdvancedExcelViewer: boolean;
-  useCustomAccessForm: boolean;
+  hideFooterOnAccessForm: boolean;
   logoOnAccessForm: boolean;
   dataroomIndexEnabled?: boolean;
   textSelectionEnabled?: boolean;
   error?: boolean;
-}) {
+};
+
+function ViewPageInner({
+  frozen,
+  linkData,
+  notionData,
+  meta,
+  showAccountCreationSlide,
+  useAdvancedExcelViewer,
+  hideFooterOnAccessForm,
+  logoOnAccessForm,
+  dataroomIndexEnabled,
+  textSelectionEnabled,
+  error,
+}: DomainViewPageProps) {
   const router = useRouter();
   const { data: session, status } = useSession();
   const [storedToken, setStoredToken] = useState<string | undefined>(undefined);
   const [storedEmail, setStoredEmail] = useState<string | undefined>(undefined);
+  const urlPasscode = useUrlPasscode();
 
   useEffect(() => {
     // Retrieve token from cookie on component mount
@@ -375,15 +382,11 @@ export default function ViewPage({
   }
 
   if (frozen) {
-    return (
-      <NotFound message="This data room has been closed and is no longer available." />
-    );
+    return <ViewerNotFound reason="dataroomClosed" />;
   }
 
   if (error) {
-    return (
-      <NotFound message="Sorry, we had trouble loading this link. Please try again in a moment." />
-    );
+    return <ViewerNotFound reason="loadErrorRetry" />;
   }
 
   const {
@@ -397,6 +400,7 @@ export default function ViewPage({
     previewToken?: string;
     preview?: string;
   };
+  const disableEditPassword = !!disableEditEmail && !!urlPasscode;
   const { linkType } = linkData;
 
   // Render workflow access view for WORKFLOW_LINK
@@ -460,15 +464,11 @@ export default function ViewPage({
 
     // If the link is expired, show a 404 page
     if (expiresAt && new Date(expiresAt) < new Date()) {
-      return (
-        <NotFound message="Sorry, the link you're looking for is expired." />
-      );
+      return <ViewerNotFound reason="expired" />;
     }
 
     if (isArchived) {
-      return (
-        <NotFound message="Sorry, the link you're looking for is archived." />
-      );
+      return <ViewerNotFound reason="archived" />;
     }
 
     return (
@@ -494,7 +494,9 @@ export default function ViewPage({
           useAdvancedExcelViewer={useAdvancedExcelViewer}
           previewToken={previewToken}
           disableEditEmail={!!disableEditEmail}
-          useCustomAccessForm={useCustomAccessForm}
+          urlPasscode={urlPasscode}
+          disableEditPassword={disableEditPassword}
+          hideFooterOnAccessForm={hideFooterOnAccessForm}
           token={storedToken}
           verifiedEmail={verifiedEmail}
           logoOnAccessForm={logoOnAccessForm}
@@ -542,15 +544,11 @@ export default function ViewPage({
 
     // If the link is expired, show a 404 page
     if (expiresAt && new Date(expiresAt) < new Date()) {
-      return (
-        <NotFound message="Sorry, the link you're looking for is expired." />
-      );
+      return <ViewerNotFound reason="expired" />;
     }
 
     if (isArchived) {
-      return (
-        <NotFound message="Sorry, the link you're looking for is archived." />
-      );
+      return <ViewerNotFound reason="archived" />;
     }
 
     return (
@@ -572,7 +570,9 @@ export default function ViewPage({
           isProtected={!!(emailProtected || linkPassword || enableAgreement)}
           brand={brand}
           disableEditEmail={!!disableEditEmail}
-          useCustomAccessForm={useCustomAccessForm}
+          urlPasscode={urlPasscode}
+          disableEditPassword={disableEditPassword}
+          hideFooterOnAccessForm={hideFooterOnAccessForm}
           token={storedToken}
           verifiedEmail={verifiedEmail}
           previewToken={previewToken}
@@ -584,4 +584,14 @@ export default function ViewPage({
       </>
     );
   }
+}
+
+export default function ViewPage(props: DomainViewPageProps) {
+  const locale = props.i18n?.locale ?? "en";
+  const resources = props.i18n?.resources ?? {};
+  return (
+    <ViewerI18nProvider locale={locale} resources={resources}>
+      <ViewPageInner {...props} />
+    </ViewerI18nProvider>
+  );
 }

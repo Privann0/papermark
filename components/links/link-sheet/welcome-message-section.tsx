@@ -69,7 +69,7 @@ export function WelcomeMessageSection({
   return (
     <div className="pb-5">
       <LinkItem
-        title="Custom Welcome Message"
+        title="Custom welcome message"
         tooltipContent="Override the default welcome message for this link"
         enabled={enabled}
         action={handleWelcomeMessageToggle}

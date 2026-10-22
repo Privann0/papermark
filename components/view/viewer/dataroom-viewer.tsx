@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 import React from "react";
 
+import { usePendingUploads } from "@/context/pending-uploads-context";
 import { ViewerChatPanel } from "@/ee/features/ai/components/viewer-chat-panel";
 import {
   ViewerChatLayout,
@@ -10,22 +11,28 @@ import {
 } from "@/ee/features/ai/components/viewer-chat-provider";
 import { ViewerChatToggle } from "@/ee/features/ai/components/viewer-chat-toggle";
 import {
+  type DataroomCardLayout,
+  type DataroomViewerHeaderStyle,
+  asDataroomCardLayout,
+  asDataroomViewerHeaderStyle,
+} from "@/ee/features/branding/lib/dataroom-viewer-layout";
+import {
+  ConversationSidebarLayout,
+  ConversationSidebarProvider,
+} from "@/ee/features/conversations/components/viewer/conversation-sidebar-provider";
+import { RequestListButton } from "@/ee/features/request-lists/components/viewer/request-list-button";
+import { useViewerRequestList } from "@/ee/features/request-lists/lib/swr/use-viewer-request-list";
+import {
   DataroomBrand,
   DataroomFolder,
   PermissionGroupAccessControls,
   ViewerGroupAccessControls,
 } from "@prisma/client";
-
-import {
-  asDataroomCardLayout,
-  asDataroomViewerHeaderStyle,
-  type DataroomCardLayout,
-  type DataroomViewerHeaderStyle,
-} from "@/ee/features/branding/lib/dataroom-viewer-layout";
 import * as SheetPrimitive from "@radix-ui/react-dialog";
 import { PanelLeftIcon, UploadIcon, XIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
-import { usePendingUploads } from "@/context/pending-uploads-context";
 import { cn } from "@/lib/utils";
 import {
   HIERARCHICAL_DISPLAY_STYLE,
@@ -50,22 +57,22 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-import { DEFAULT_DATAROOM_VIEW_TYPE } from "../dataroom/dataroom-view";
-import DocumentCard from "../dataroom/document-card";
+import { CompactDataroomListHeader } from "../dataroom/compact-dataroom-list-header";
 import { DataroomNoBannerTitle } from "../dataroom/dataroom-no-banner-title";
-import { DocumentUploadModal } from "../dataroom/document-upload-modal";
 import {
   DataroomTrailingActions,
   VIEWER_OPEN_DOWNLOAD_EVENT,
   VIEWER_TOGGLE_CONVERSATIONS_EVENT,
 } from "../dataroom/dataroom-trailing-actions";
+import { DEFAULT_DATAROOM_VIEW_TYPE } from "../dataroom/dataroom-view";
+import DocumentCard from "../dataroom/document-card";
+import { DocumentUploadModal } from "../dataroom/document-upload-modal";
 import FolderCard from "../dataroom/folder-card";
 import IndexFileDialog from "../dataroom/index-file-dialog";
 import {
   IntroductionInfoButton,
   IntroductionProvider,
 } from "../dataroom/introduction-modal";
-import { CompactDataroomListHeader } from "../dataroom/compact-dataroom-list-header";
 import DataroomNav from "../dataroom/nav-dataroom";
 import PendingDocumentCard from "../dataroom/pending-document-card";
 import {
@@ -216,6 +223,7 @@ export default function DataroomViewer({
   };
 
   const router = useRouter();
+  const { t } = useTranslation("dataroom");
   const searchQuery = (router.query.search as string)?.toLowerCase() || "";
 
   // Tab state: "documents" (normal view) or "my-uploads" (visitor's uploads)
@@ -247,15 +255,13 @@ export default function DataroomViewer({
               onClick={() => setFolderId(null)}
               className="-mx-1.5 cursor-pointer rounded-md px-1.5 py-0.5 text-[var(--viewer-muted-text)] transition-colors hover:bg-[var(--viewer-panel-bg-hover)] hover:text-[var(--viewer-text)]"
             >
-              Home
+              {t("breadcrumb.home", "Home")}
             </BreadcrumbLink>
           </BreadcrumbItem>
 
           {breadcrumbFolders.map((folder, index) => (
             <React.Fragment key={folder.id}>
-              <BreadcrumbSeparator
-                className="text-[var(--viewer-subtle-text)]"
-              />
+              <BreadcrumbSeparator className="text-[var(--viewer-subtle-text)]" />
               <BreadcrumbItem>
                 <ViewerBreadcrumbItem
                   folder={folder}
@@ -269,7 +275,7 @@ export default function DataroomViewer({
         </BreadcrumbList>
       </Breadcrumb>
     ),
-    [breadcrumbFolders, dataroomIndexEnabled, setFolderId],
+    [breadcrumbFolders, dataroomIndexEnabled, setFolderId, t],
   );
 
   // Index access controls by `itemId` once per change so the per-document
@@ -437,8 +443,7 @@ export default function DataroomViewer({
   // hoisted into the body toolbar so they sit on the right of the search.
   const notionHasBanner =
     (brand?.banner ?? null) !== "no-banner" && !!brand?.banner;
-  const isNotionLayout =
-    viewerHeaderStyle === "NOTION" && notionHasBanner;
+  const isNotionLayout = viewerHeaderStyle === "NOTION" && notionHasBanner;
 
   // create a mixedItems array with folders and documents of the current folder and memoize it
   const mixedItems = useMemo(() => {
@@ -467,8 +472,7 @@ export default function DataroomViewer({
       .map((folder) => {
         // Get pre-calculated effective updatedAt
         const effectiveUpdatedAt =
-          folderEffectiveUpdatedAt.get(folder.id) ||
-          new Date(folder.updatedAt);
+          folderEffectiveUpdatedAt.get(folder.id) || new Date(folder.updatedAt);
 
         // Show the download action when any descendant doc is downloadable
         // — including the partial case where some are and some aren't, and
@@ -488,9 +492,7 @@ export default function DataroomViewer({
     const documentItems: FolderOrDocument[] = (documents || [])
       .filter((doc) => doc.folderId === folderId)
       .map((doc) => {
-        const accessControl = accessControlByItemId.get(
-          doc.dataroomDocumentId,
-        );
+        const accessControl = accessControlByItemId.get(doc.dataroomDocumentId);
 
         return {
           ...doc,
@@ -551,7 +553,9 @@ export default function DataroomViewer({
     allUploads.forEach((upload) => {
       if (upload.status !== "processing" || !upload.documentId) return;
 
-      const matchingDocument = documents.find((doc) => doc.id === upload.documentId);
+      const matchingDocument = documents.find(
+        (doc) => doc.id === upload.documentId,
+      );
       if (!matchingDocument) return;
 
       const primaryVersion = matchingDocument.versions[0];
@@ -655,6 +659,16 @@ export default function DataroomViewer({
   // search input's adaptive styling.
   const viewerThemedTriggerClass =
     "border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] hover:bg-[var(--viewer-panel-bg-hover)] hover:text-[var(--viewer-text)]";
+
+  // Whether to show the Request List trigger button in the toolbar (next to
+  // Add document / Search / Introduction). Shares its detection request with
+  // the nav's sheet via SWR dedup.
+  const { enabled: requestListEnabled } = useViewerRequestList({
+    linkId,
+    dataroomId: dataroom?.id,
+    viewerId,
+    isPreview,
+  });
   const mobileTreeTheme = useMemo(
     () => ({
       ...viewerSurfaceTheme,
@@ -674,511 +688,605 @@ export default function DataroomViewer({
 
   return (
     <IntroductionProvider dataroom={dataroom} viewerId={viewerId}>
-      <ViewerChatProvider
-        enabled={viewData.agentsEnabled}
-        dataroomId={dataroom?.id}
-        dataroomName={viewData.dataroomName}
-        linkId={linkId}
-        viewId={viewId}
-        viewerId={viewerId}
-        documents={documentsForChat}
-        folders={folders}
-      >
-      <DataroomNav
-        brand={brand}
-        linkId={linkId}
-        viewId={viewId}
-        dataroom={dataroom}
-        allowDownload={allDocumentsCanDownload}
-        allowBulkDownload={allowBulkDownload}
-        isPreview={isPreview}
-        dataroomId={dataroom?.id}
-        viewerId={viewerId}
-        viewerEmail={viewerEmail}
-        conversationsEnabled={viewData.conversationsEnabled}
-        isTeamMember={viewData.isTeamMember}
-        topBarBreadcrumb={isModernLayout ? toolbarBreadcrumbEl : undefined}
-        topBarSearch={
-          isModernLayout ? (
-            <SearchBoxPersisted
-              inputClassName="h-9 border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] placeholder:text-[var(--viewer-placeholder)] shadow-sm hover:border-[var(--viewer-control-border-strong)] focus:border-[var(--viewer-control-border-strong)]"
-              leftIconClassName="text-[var(--viewer-control-icon)]"
-              clearIconClassName="text-[var(--viewer-control-icon)] hover:text-[var(--viewer-text)]"
-            />
-          ) : undefined
-        }
-        topBarTrailingActions={
-          isModernLayout ? (
-            <>
-              <IntroductionInfoButton />
-              {enableIndexFile && viewId && viewerId && (
-                <IndexFileDialog
-                  linkId={linkId}
-                  viewId={viewId}
-                  dataroomId={dataroom?.id}
-                  viewerId={viewerId}
-                  viewerEmail={viewerEmail}
-                  triggerClassName={viewerThemedTriggerClass}
+      <ConversationSidebarProvider>
+        <ViewerChatProvider
+          enabled={viewData.agentsEnabled}
+          dataroomId={dataroom?.id}
+          dataroomName={viewData.dataroomName}
+          linkId={linkId}
+          viewId={viewId}
+          viewerId={viewerId}
+          documents={documentsForChat}
+          folders={folders}
+        >
+          <DataroomNav
+            brand={brand}
+            linkId={linkId}
+            viewId={viewId}
+            dataroom={dataroom}
+            allowDownload={allDocumentsCanDownload}
+            allowBulkDownload={allowBulkDownload}
+            isPreview={isPreview}
+            dataroomId={dataroom?.id}
+            viewerId={viewerId}
+            viewerEmail={viewerEmail}
+            conversationsEnabled={viewData.conversationsEnabled}
+            isTeamMember={viewData.isTeamMember}
+            topBarBreadcrumb={isModernLayout ? toolbarBreadcrumbEl : undefined}
+            topBarSearch={
+              isModernLayout ? (
+                <SearchBoxPersisted
+                  placeholder={t("search.placeholder", "Search...")}
+                  inputClassName="h-9 border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] placeholder:text-[var(--viewer-placeholder)] shadow-sm hover:border-[var(--viewer-control-border-strong)] focus:border-[var(--viewer-control-border-strong)]"
+                  leftIconClassName="text-[var(--viewer-control-icon)]"
+                  clearIconClassName="text-[var(--viewer-control-icon)] hover:text-[var(--viewer-text)]"
                 />
-              )}
-              {viewData?.enableVisitorUpload && viewerId && (
-                <DocumentUploadModal
-                  linkId={linkId}
-                  dataroomId={dataroom?.id}
-                  viewerId={viewerId}
-                  folderId={folderId ?? undefined}
-                  folderName={
-                    folderId
-                      ? folders.find((f) => f.id === folderId)?.name
+              ) : undefined
+            }
+            topBarTrailingActions={
+              isModernLayout ? (
+                <>
+                  <IntroductionInfoButton />
+                  {enableIndexFile &&
+                    (isPreview || (viewId && viewerId)) && (
+                      <IndexFileDialog
+                        linkId={linkId}
+                        viewId={viewId ?? ""}
+                        dataroomId={dataroom?.id}
+                        viewerId={viewerId}
+                        viewerEmail={viewerEmail}
+                        isPreview={isPreview}
+                        triggerClassName={viewerThemedTriggerClass}
+                      />
+                    )}
+                  {viewData?.enableVisitorUpload &&
+                    (isPreview || viewerId) && (
+                      <DocumentUploadModal
+                        linkId={linkId}
+                        dataroomId={dataroom?.id}
+                        viewerId={viewerId ?? ""}
+                        isPreview={isPreview}
+                        folderId={folderId ?? undefined}
+                        folderName={
+                          folderId
+                            ? folders.find((f) => f.id === folderId)?.name
+                            : undefined
+                        }
+                        allowedFolders={viewData?.uploadFolderAllowList}
+                        triggerClassName={viewerThemedTriggerClass}
+                      />
+                    )}
+                  {requestListEnabled && (
+                    <RequestListButton className={viewerThemedTriggerClass} />
+                  )}
+                </>
+              ) : undefined
+            }
+            surfaceBackgroundColor={
+              (brand as any)?.applyAccentColorToDataroomView
+                ? (brand?.accentColor ?? null)
+                : null
+            }
+          />
+          <ViewerSurfaceThemeProvider value={viewerSurfaceTheme}>
+            <ViewerChatLayout>
+              <ConversationSidebarLayout>
+                <div
+                  className="relative flex flex-1 flex-col bg-white dark:bg-black"
+                  style={
+                    viewerSurfaceTheme.palette.backgroundColor
+                      ? {
+                          backgroundColor:
+                            viewerSurfaceTheme.palette.backgroundColor,
+                        }
                       : undefined
                   }
-                  allowedFolders={viewData?.uploadFolderAllowList}
-                  triggerClassName={viewerThemedTriggerClass}
-                />
-              )}
-            </>
-          ) : undefined
-        }
-        surfaceBackgroundColor={
-          (brand as any)?.applyAccentColorToDataroomView
-            ? brand?.accentColor ?? null
-            : null
-        }
-      />
-      <ViewerSurfaceThemeProvider value={viewerSurfaceTheme}>
-        <ViewerChatLayout>
-          <div
-            className="relative flex flex-1 flex-col bg-white dark:bg-black"
-            style={
-              viewerSurfaceTheme.palette.backgroundColor
-                ? { backgroundColor: viewerSurfaceTheme.palette.backgroundColor }
-                : undefined
-            }
-          >
-            <div
-              className="relative mx-auto flex w-full flex-1 flex-col"
-              style={
-                {
-                  "--viewer-text": viewerSurfaceTheme.palette.textColor,
-                  "--viewer-muted-text": viewerSurfaceTheme.palette.mutedTextColor,
-                  "--viewer-subtle-text":
-                    viewerSurfaceTheme.palette.subtleTextColor,
-                  "--viewer-panel-bg": viewerSurfaceTheme.palette.panelBgColor,
-                  "--viewer-panel-bg-hover":
-                    viewerSurfaceTheme.palette.panelHoverBgColor,
-                  "--viewer-panel-border":
-                    viewerSurfaceTheme.palette.panelBorderColor,
-                  "--viewer-panel-border-hover":
-                    viewerSurfaceTheme.palette.panelBorderHoverColor,
-                  "--viewer-control-bg": viewerSurfaceTheme.palette.controlBgColor,
-                  "--viewer-control-border":
-                    viewerSurfaceTheme.palette.controlBorderColor,
-                  "--viewer-control-border-strong":
-                    viewerSurfaceTheme.palette.controlBorderStrongColor,
-                  "--viewer-control-icon":
-                    viewerSurfaceTheme.palette.controlIconColor,
-                  "--viewer-placeholder":
-                    viewerSurfaceTheme.palette.controlPlaceholderColor,
-                  // Brand accent — opt-in highlights for index prefix, breadcrumb
-                  // leaf, etc. Falls back to brand color, then the surface text
-                  // color so it always reads on the current surface.
-                  "--viewer-accent":
-                    (brand as any)?.accentButtonColor ||
-                    brand?.brandColor ||
-                    viewerSurfaceTheme.palette.textColor,
-                } as React.CSSProperties
-              }
-            >
-            <div className="flex w-full flex-1 items-start justify-center">
-            {showLeftColumnDesktop && (
-            <div
-              className="sticky top-0 hidden max-h-screen shrink-0 self-start overflow-y-auto overflow-x-hidden px-3 pb-4 pt-4 md:block md:px-4 md:pt-6 lg:px-6 lg:pt-9 xl:px-8"
-              style={{
-                width: "clamp(260px, 28vw, 440px)",
-              }}
-            >
-              {showNoBannerTitle ? (
-                <DataroomNoBannerTitle
-                  name={dataroom.name}
-                  lastUpdatedAt={dataroom.lastUpdatedAt}
-                  showLastUpdated={dataroom.showLastUpdated}
-                  className="mb-3"
-                />
-              ) : null}
-              {showFolderTree && (
-                <ViewFolderTree
-                  folders={folders}
-                  documents={documents}
-                  setFolderId={setFolderId}
-                  folderId={folderId}
-                  dataroomIndexEnabled={dataroomIndexEnabled}
-                />
-              )}
-            </div>
-            )}
+                >
+                  <div
+                    className="relative mx-auto flex w-full flex-1 flex-col"
+                    style={
+                      {
+                        "--viewer-text": viewerSurfaceTheme.palette.textColor,
+                        "--viewer-muted-text":
+                          viewerSurfaceTheme.palette.mutedTextColor,
+                        "--viewer-subtle-text":
+                          viewerSurfaceTheme.palette.subtleTextColor,
+                        "--viewer-panel-bg":
+                          viewerSurfaceTheme.palette.panelBgColor,
+                        "--viewer-panel-bg-hover":
+                          viewerSurfaceTheme.palette.panelHoverBgColor,
+                        "--viewer-panel-border":
+                          viewerSurfaceTheme.palette.panelBorderColor,
+                        "--viewer-panel-border-hover":
+                          viewerSurfaceTheme.palette.panelBorderHoverColor,
+                        "--viewer-control-bg":
+                          viewerSurfaceTheme.palette.controlBgColor,
+                        "--viewer-control-border":
+                          viewerSurfaceTheme.palette.controlBorderColor,
+                        "--viewer-control-border-strong":
+                          viewerSurfaceTheme.palette.controlBorderStrongColor,
+                        "--viewer-control-icon":
+                          viewerSurfaceTheme.palette.controlIconColor,
+                        "--viewer-placeholder":
+                          viewerSurfaceTheme.palette.controlPlaceholderColor,
+                        // Brand accent — opt-in highlights for index prefix, breadcrumb
+                        // leaf, etc. Falls back to brand color, then the surface text
+                        // color so it always reads on the current surface.
+                        "--viewer-accent":
+                          (brand as any)?.accentButtonColor ||
+                          brand?.brandColor ||
+                          viewerSurfaceTheme.palette.textColor,
+                      } as React.CSSProperties
+                    }
+                  >
+                    <div className="flex w-full flex-1 items-start justify-center">
+                      {showLeftColumnDesktop && (
+                        <div
+                          className="sticky top-0 hidden max-h-screen shrink-0 self-start overflow-y-auto overflow-x-hidden px-3 pb-4 pt-4 md:block md:px-4 md:pt-6 lg:px-6 lg:pt-9 xl:px-8"
+                          style={{
+                            width: "clamp(260px, 28vw, 440px)",
+                          }}
+                        >
+                          {showNoBannerTitle ? (
+                            <DataroomNoBannerTitle
+                              name={dataroom.name}
+                              lastUpdatedAt={dataroom.lastUpdatedAt}
+                              showLastUpdated={dataroom.showLastUpdated}
+                              className="mb-3"
+                            />
+                          ) : null}
+                          {showFolderTree && (
+                            <ViewFolderTree
+                              folders={folders}
+                              documents={documents}
+                              setFolderId={setFolderId}
+                              folderId={folderId}
+                              dataroomIndexEnabled={dataroomIndexEnabled}
+                            />
+                          )}
+                        </div>
+                      )}
 
-            {/* Detail view — scrolls with the page, not in its own viewport */}
-            <div className="min-w-0 flex-grow">
-              <div
-                className="px-3 pb-4 pt-4 md:px-6 md:pt-6 lg:px-8 lg:pt-9 xl:px-14"
-              >
-                  {showNoBannerTitle && !showLeftColumnDesktop ? (
-                    <DataroomNoBannerTitle
-                      name={dataroom.name}
-                      lastUpdatedAt={dataroom.lastUpdatedAt}
-                      showLastUpdated={dataroom.showLastUpdated}
-                      className="mb-2 md:mb-3"
-                    />
-                  ) : null}
-                  {/* Modern (SPLIT + LIST) renders its toolbar (breadcrumb,
+                      {/* Detail view — scrolls with the page, not in its own viewport */}
+                      <div className="min-w-0 flex-grow">
+                        <div className="px-3 pb-4 pt-4 md:px-6 md:pt-6 lg:px-8 lg:pt-9 xl:px-14">
+                          {showNoBannerTitle && !showLeftColumnDesktop ? (
+                            <DataroomNoBannerTitle
+                              name={dataroom.name}
+                              lastUpdatedAt={dataroom.lastUpdatedAt}
+                              showLastUpdated={dataroom.showLastUpdated}
+                              className="mb-2 md:mb-3"
+                            />
+                          ) : null}
+                          {/* Modern (SPLIT + LIST) renders its toolbar (breadcrumb,
                       search, action buttons) inside the nav top-row so the
                       body skips this section entirely. All other layouts use
                       the in-body toolbar below. */}
-                  {!isModernLayout ? (
-                    <div className="flex items-center gap-x-2">
-                      {/* Mobile folder tree drawer — only when folder navigation is enabled */}
-                      {showFolderTree ? (
-                        <div className="flex md:hidden">
-                          <Sheet>
-                            <SheetTrigger asChild>
-                              <button
-                                className={cn(
-                                  "lg:hidden",
-                                  "text-[var(--viewer-subtle-text)]",
-                                )}
-                              >
-                                <PanelLeftIcon
-                                  className="h-5 w-5"
-                                  aria-hidden="true"
-                                />
-                              </button>
-                            </SheetTrigger>
-                            <SheetPortal>
-                              <SheetOverlay className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-                              <SheetPrimitive.Content
-                                className={cn(
-                                  "fixed inset-y-0 left-0 z-50 gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
-                                  "border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-lg",
-                                  "m-0 w-[280px] p-0 sm:w-[300px] lg:hidden",
-                                )}
-                              >
-                                <div className="mt-8 h-full space-y-8 overflow-auto px-2 py-3">
-                                  <ViewerSurfaceThemeProvider
-                                    value={mobileTreeTheme}
-                                  >
-                                    {showNoBannerTitle ? (
-                                      <DataroomNoBannerTitle
-                                        name={dataroom.name}
-                                        lastUpdatedAt={dataroom.lastUpdatedAt}
-                                        showLastUpdated={
-                                          dataroom.showLastUpdated
-                                        }
-                                        className="mb-3 px-1"
-                                      />
-                                    ) : null}
-                                    <ViewFolderTree
-                                      folders={folders}
-                                      documents={documents}
-                                      setFolderId={setFolderId}
-                                      folderId={folderId}
-                                      dataroomIndexEnabled={
-                                        dataroomIndexEnabled
-                                      }
-                                    />
-                                  </ViewerSurfaceThemeProvider>
+                          {!isModernLayout ? (
+                            <div className="flex items-center gap-x-2">
+                              {/* Mobile folder tree drawer — only when folder navigation is enabled */}
+                              {showFolderTree ? (
+                                <div className="flex md:hidden">
+                                  <Sheet>
+                                    <SheetTrigger asChild>
+                                      <button
+                                        className={cn(
+                                          "lg:hidden",
+                                          "text-[var(--viewer-subtle-text)]",
+                                        )}
+                                      >
+                                        <PanelLeftIcon
+                                          className="h-5 w-5"
+                                          aria-hidden="true"
+                                        />
+                                      </button>
+                                    </SheetTrigger>
+                                    <SheetPortal>
+                                      <SheetOverlay className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+                                      <SheetPrimitive.Content
+                                        className={cn(
+                                          "fixed inset-y-0 left-0 z-50 gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=open]:animate-in data-[state=closed]:animate-out",
+                                          "border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-lg",
+                                          "m-0 w-[280px] p-0 sm:w-[300px] lg:hidden",
+                                        )}
+                                      >
+                                        <div className="mt-8 h-full space-y-8 overflow-auto px-2 py-3">
+                                          <ViewerSurfaceThemeProvider
+                                            value={mobileTreeTheme}
+                                          >
+                                            {showNoBannerTitle ? (
+                                              <DataroomNoBannerTitle
+                                                name={dataroom.name}
+                                                lastUpdatedAt={
+                                                  dataroom.lastUpdatedAt
+                                                }
+                                                showLastUpdated={
+                                                  dataroom.showLastUpdated
+                                                }
+                                                className="mb-3 px-1"
+                                              />
+                                            ) : null}
+                                            <ViewFolderTree
+                                              folders={folders}
+                                              documents={documents}
+                                              setFolderId={setFolderId}
+                                              folderId={folderId}
+                                              dataroomIndexEnabled={
+                                                dataroomIndexEnabled
+                                              }
+                                            />
+                                          </ViewerSurfaceThemeProvider>
+                                        </div>
+                                        <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+                                          <XIcon className="h-4 w-4" />
+                                          <span className="sr-only">Close</span>
+                                        </SheetPrimitive.Close>
+                                      </SheetPrimitive.Content>
+                                    </SheetPortal>
+                                  </Sheet>
                                 </div>
-                                <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
-                                  <XIcon className="h-4 w-4" />
-                                  <span className="sr-only">Close</span>
-                                </SheetPrimitive.Close>
-                              </SheetPrimitive.Content>
-                            </SheetPortal>
-                          </Sheet>
-                        </div>
-                      ) : null}
+                              ) : null}
 
-                      <div className="flex min-w-0 flex-1 items-center justify-between gap-x-2">
-                        {toolbarBreadcrumbEl}
+                              <div className="flex min-w-0 flex-1 items-center justify-between gap-x-2">
+                                {toolbarBreadcrumbEl}
 
-                        {/* Right cluster: search + buttons. Single inline row on
+                                {/* Right cluster: search + buttons. Single inline row on
                             sm+ (matches the historical layout). On narrow
                             mobile we allow wrapping so the buttons drop to a
                             new line instead of overflowing the row — this is
                             the only mobile concession; sm+ is unchanged. */}
-                        <div className="flex flex-wrap items-center justify-end gap-2 sm:flex-nowrap sm:gap-x-2">
-                          <IntroductionInfoButton />
-                          <SearchBoxPersisted
-                            inputClassName="h-9 border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] placeholder:text-[var(--viewer-placeholder)] shadow-sm hover:border-[var(--viewer-control-border-strong)] focus:border-[var(--viewer-control-border-strong)]"
-                            leftIconClassName="text-[var(--viewer-control-icon)]"
-                            clearIconClassName="text-[var(--viewer-control-icon)] hover:text-[var(--viewer-text)]"
-                          />
-                          {enableIndexFile && viewId && viewerId && (
-                            <IndexFileDialog
-                              linkId={linkId}
-                              viewId={viewId}
-                              dataroomId={dataroom?.id}
-                              viewerId={viewerId}
-                              viewerEmail={viewerEmail}
-                              triggerClassName={viewerThemedTriggerClass}
-                            />
+                                <div className="flex flex-wrap items-center justify-end gap-2 sm:flex-nowrap sm:gap-x-2">
+                                  <IntroductionInfoButton />
+                                  <SearchBoxPersisted
+                                    placeholder={t(
+                                      "search.placeholder",
+                                      "Search...",
+                                    )}
+                                    inputClassName="h-9 border-[var(--viewer-control-border)] bg-[var(--viewer-control-bg)] text-[var(--viewer-text)] placeholder:text-[var(--viewer-placeholder)] shadow-sm hover:border-[var(--viewer-control-border-strong)] focus:border-[var(--viewer-control-border-strong)]"
+                                    leftIconClassName="text-[var(--viewer-control-icon)]"
+                                    clearIconClassName="text-[var(--viewer-control-icon)] hover:text-[var(--viewer-text)]"
+                                  />
+                                  {enableIndexFile &&
+                                    (isPreview || (viewId && viewerId)) && (
+                                      <IndexFileDialog
+                                        linkId={linkId}
+                                        viewId={viewId ?? ""}
+                                        dataroomId={dataroom?.id}
+                                        viewerId={viewerId}
+                                        viewerEmail={viewerEmail}
+                                        isPreview={isPreview}
+                                        triggerClassName={
+                                          viewerThemedTriggerClass
+                                        }
+                                      />
+                                    )}
+
+                                  {viewData?.enableVisitorUpload &&
+                                    (isPreview || viewerId) && (
+                                      <DocumentUploadModal
+                                        linkId={linkId}
+                                        dataroomId={dataroom?.id}
+                                        viewerId={viewerId ?? ""}
+                                        isPreview={isPreview}
+                                        folderId={folderId ?? undefined}
+                                        folderName={
+                                          folderId
+                                            ? folders.find(
+                                                (f) => f.id === folderId,
+                                              )?.name
+                                            : undefined
+                                        }
+                                        allowedFolders={
+                                          viewData?.uploadFolderAllowList
+                                        }
+                                        triggerClassName={
+                                          viewerThemedTriggerClass
+                                        }
+                                      />
+                                    )}
+                                  {requestListEnabled && (
+                                    <RequestListButton
+                                      className={viewerThemedTriggerClass}
+                                    />
+                                  )}
+                                  {isNotionLayout ? (
+                                    <DataroomTrailingActions
+                                      variant="onLight"
+                                      isTeamMember={viewData?.isTeamMember}
+                                      brand={{
+                                        ctaLabel:
+                                          (brand as any)?.ctaLabel ?? null,
+                                        ctaUrl: (brand as any)?.ctaUrl ?? null,
+                                        brandColor: brand?.brandColor ?? null,
+                                        accentButtonColor:
+                                          (brand as any)?.accentButtonColor ??
+                                          null,
+                                      }}
+                                      conversationsEnabled={
+                                        viewData?.conversationsEnabled
+                                      }
+                                      allowDownload={allowDownload}
+                                      allowBulkDownload={allowBulkDownload}
+                                      viewerEmail={viewerEmail}
+                                      isPreview={isPreview}
+                                      onToggleConversations={() =>
+                                        window.dispatchEvent(
+                                          new CustomEvent(
+                                            VIEWER_TOGGLE_CONVERSATIONS_EVENT,
+                                          ),
+                                        )
+                                      }
+                                      onOpenDownload={() => {
+                                        if (isPreview) {
+                                          toast.error(
+                                            t(
+                                              "navToasts.cannotDownloadPreview",
+                                              "You cannot download datarooms in preview mode.",
+                                            ),
+                                          );
+                                          return;
+                                        }
+                                        if (
+                                          !allowDownload ||
+                                          !allowBulkDownload
+                                        )
+                                          return;
+                                        if (!viewerEmail) return;
+                                        window.dispatchEvent(
+                                          new CustomEvent(
+                                            VIEWER_OPEN_DOWNLOAD_EVENT,
+                                          ),
+                                        );
+                                      }}
+                                    />
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {/* Tabs: Documents / My Uploads. Request List uploads
+                              also land here, so show the tab when either visitor
+                              upload or a request list is available. */}
+                          {(viewData?.enableVisitorUpload ||
+                            requestListEnabled) &&
+                            hasUploads && (
+                            <div
+                              className="mt-4 flex items-center gap-1 border-b"
+                              style={{
+                                borderColor:
+                                  viewerSurfaceTheme.palette.panelBorderColor,
+                              }}
+                            >
+                              <button
+                                onClick={() => setActiveTab("documents")}
+                                className={cn(
+                                  "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+                                  activeTab === "documents"
+                                    ? "border-[var(--viewer-text)] text-[var(--viewer-text)]"
+                                    : "border-transparent text-[var(--viewer-subtle-text)] hover:border-[var(--viewer-panel-border-hover)] hover:text-[var(--viewer-text)]",
+                                )}
+                              >
+                                {t("tabs.documents", "Documents")}
+                              </button>
+                              <button
+                                onClick={() => setActiveTab("my-uploads")}
+                                className={cn(
+                                  "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+                                  activeTab === "my-uploads"
+                                    ? "border-[var(--viewer-text)] text-[var(--viewer-text)]"
+                                    : "border-transparent text-[var(--viewer-subtle-text)] hover:border-[var(--viewer-panel-border-hover)] hover:text-[var(--viewer-text)]",
+                                )}
+                              >
+                                <UploadIcon className="h-3.5 w-3.5" />
+                                {t("tabs.myUploads", "My Uploads")}
+                                <span
+                                  className="inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-medium"
+                                  style={{
+                                    backgroundColor:
+                                      viewerSurfaceTheme.palette.controlBgColor,
+                                    color:
+                                      viewerSurfaceTheme.palette.mutedTextColor,
+                                  }}
+                                >
+                                  {allUploads.length}
+                                </span>
+                              </button>
+                            </div>
                           )}
 
-                          {viewData?.enableVisitorUpload && viewerId && (
-                            <DocumentUploadModal
-                              linkId={linkId}
-                              dataroomId={dataroom?.id}
-                              viewerId={viewerId}
-                              folderId={folderId ?? undefined}
-                              folderName={
-                                folderId
-                                  ? folders.find((f) => f.id === folderId)?.name
-                                  : undefined
-                              }
-                              allowedFolders={viewData?.uploadFolderAllowList}
-                              triggerClassName={viewerThemedTriggerClass}
-                            />
+                          {/* Search results banner */}
+                          {searchQuery && activeTab === "documents" && (
+                            <div className="mt-4 rounded-md border border-[var(--viewer-panel-border)] bg-[var(--viewer-control-bg)] px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-medium text-[var(--viewer-muted-text)]">
+                                  {t(
+                                    "search.results",
+                                    'Search results for "{{query}}"',
+                                    { query: searchQuery },
+                                  )}
+                                </div>
+                                <div className="text-xs text-[var(--viewer-subtle-text)]">
+                                  {t(
+                                    "search.resultCount",
+                                    "({{count}} results across all folders)",
+                                    { count: mixedItems.length },
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           )}
-                          {isNotionLayout ? (
-                            <DataroomTrailingActions
-                              variant="onLight"
-                              isTeamMember={viewData?.isTeamMember}
-                              brand={{
-                                ctaLabel: (brand as any)?.ctaLabel ?? null,
-                                ctaUrl: (brand as any)?.ctaUrl ?? null,
-                                brandColor: brand?.brandColor ?? null,
-                                accentButtonColor:
-                                  (brand as any)?.accentButtonColor ?? null,
-                              }}
-                              conversationsEnabled={
-                                viewData?.conversationsEnabled
-                              }
-                              allowDownload={allowDownload}
-                              allowBulkDownload={allowBulkDownload}
-                              viewerEmail={viewerEmail}
-                              onToggleConversations={() =>
-                                window.dispatchEvent(
-                                  new CustomEvent(
-                                    VIEWER_TOGGLE_CONVERSATIONS_EVENT,
+
+                          {activeTab === "my-uploads" ? (
+                            /* My Uploads tab - show all uploads across all folders */
+                            <ul
+                              role="list"
+                              className="-mx-4 space-y-4 overflow-auto p-4"
+                            >
+                              {allUploads.length === 0 ? (
+                                <li className="py-6 text-center text-[var(--viewer-subtle-text)]">
+                                  {t(
+                                    "empty.noUploads",
+                                    'No uploads yet. Upload documents using the "Add Document" button.',
+                                  )}
+                                </li>
+                              ) : (
+                                allUploads.map((pendingUpload) => (
+                                  <li key={pendingUpload.id}>
+                                    <PendingDocumentCard
+                                      pendingUpload={pendingUpload}
+                                      folders={folders}
+                                      linkId={linkId}
+                                      showFolderPath
+                                      onNavigateToFolder={(id) => {
+                                        setFolderId(id);
+                                        setActiveTab("documents");
+                                      }}
+                                    />
+                                  </li>
+                                ))
+                              )}
+                            </ul>
+                          ) : cardLayout === "GRID" ? (
+                            <div className="-mx-4 space-y-4 overflow-auto p-4">
+                              {!searchQuery &&
+                                filteredPendingUploads.map((pendingUpload) => (
+                                  <div key={pendingUpload.id}>
+                                    <PendingDocumentCard
+                                      pendingUpload={pendingUpload}
+                                      linkId={linkId}
+                                    />
+                                  </div>
+                                ))}
+
+                              {mixedItems.length === 0 &&
+                              filteredPendingUploads.length === 0 ? (
+                                <div className="py-6 text-center text-[var(--viewer-subtle-text)]">
+                                  {searchQuery
+                                    ? t(
+                                        "search.noMatches",
+                                        "No documents match your search.",
+                                      )
+                                    : t("empty.noItems", "No items available.")}
+                                </div>
+                              ) : (
+                                segmentMixedItemsForGrid(mixedItems).map(
+                                  (run, runIdx) => (
+                                    <ul
+                                      key={runIdx}
+                                      role="list"
+                                      className={
+                                        run.kind === "folder"
+                                          ? folderGridListClassName
+                                          : documentGridListClassName
+                                      }
+                                    >
+                                      {run.items.map((item) => (
+                                        <li key={item.id}>
+                                          {renderItem(item)}
+                                        </li>
+                                      ))}
+                                    </ul>
                                   ),
                                 )
-                              }
-                              onOpenDownload={() => {
-                                if (isPreview) return;
-                                if (!allowDownload || !allowBulkDownload)
-                                  return;
-                                if (!viewerEmail) return;
-                                window.dispatchEvent(
-                                  new CustomEvent(VIEWER_OPEN_DOWNLOAD_EVENT),
-                                );
-                              }}
-                            />
-                          ) : null}
+                              )}
+                            </div>
+                          ) : (
+                            /* Documents tab — list / compact layouts */
+                            <div
+                              className={cn(
+                                cardLayout === "COMPACT" &&
+                                  "mt-4 border-t border-[var(--viewer-panel-border)]",
+                              )}
+                            >
+                              {cardLayout === "COMPACT" ? (
+                                <CompactDataroomListHeader
+                                  showUpdatedColumn={compactTableShowUpdated}
+                                  showSettingsColumn={
+                                    compactListShowsActionsColumn
+                                  }
+                                  showIndexColumn
+                                />
+                              ) : null}
+                              <ul role="list" className={itemListClassName}>
+                                {!searchQuery &&
+                                  filteredPendingUploads.map(
+                                    (pendingUpload) => (
+                                      <li key={pendingUpload.id}>
+                                        <PendingDocumentCard
+                                          pendingUpload={pendingUpload}
+                                          linkId={linkId}
+                                        />
+                                      </li>
+                                    ),
+                                  )}
+
+                                {mixedItems.length === 0 &&
+                                filteredPendingUploads.length === 0 ? (
+                                  <li className="py-6 text-center text-[var(--viewer-subtle-text)]">
+                                    {searchQuery
+                                      ? t(
+                                          "search.noMatches",
+                                          "No documents match your search.",
+                                        )
+                                      : t(
+                                          "empty.noItems",
+                                          "No items available.",
+                                        )}
+                                  </li>
+                                ) : (
+                                  mixedItems.map((item, idx) => (
+                                    <li key={item.id}>
+                                      {renderItem(item, idx)}
+                                    </li>
+                                  ))
+                                )}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
-                  ) : null}
-
-                {/* Tabs: Documents / My Uploads */}
-                {viewData?.enableVisitorUpload && hasUploads && (
-                  <div
-                    className="mt-4 flex items-center gap-1 border-b"
-                    style={{ borderColor: viewerSurfaceTheme.palette.panelBorderColor }}
-                  >
-                    <button
-                      onClick={() => setActiveTab("documents")}
-                      className={cn(
-                        "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-                        activeTab === "documents"
-                          ? "border-[var(--viewer-text)] text-[var(--viewer-text)]"
-                          : "border-transparent text-[var(--viewer-subtle-text)] hover:border-[var(--viewer-panel-border-hover)] hover:text-[var(--viewer-text)]",
-                      )}
-                    >
-                      Documents
-                    </button>
-                    <button
-                      onClick={() => setActiveTab("my-uploads")}
-                      className={cn(
-                        "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
-                        activeTab === "my-uploads"
-                          ? "border-[var(--viewer-text)] text-[var(--viewer-text)]"
-                          : "border-transparent text-[var(--viewer-subtle-text)] hover:border-[var(--viewer-panel-border-hover)] hover:text-[var(--viewer-text)]",
-                      )}
-                    >
-                      <UploadIcon className="h-3.5 w-3.5" />
-                      My Uploads
-                      <span
-                        className="inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-xs font-medium"
-                        style={{
-                          backgroundColor: viewerSurfaceTheme.palette.controlBgColor,
-                          color: viewerSurfaceTheme.palette.mutedTextColor,
-                        }}
-                      >
-                        {allUploads.length}
-                      </span>
-                    </button>
-                  </div>
-                )}
-
-                {/* Search results banner */}
-                {searchQuery && activeTab === "documents" && (
-                  <div className="mt-4 rounded-md border border-[var(--viewer-panel-border)] bg-[var(--viewer-control-bg)] px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="text-sm font-medium text-[var(--viewer-muted-text)]">
-                        Search results for &quot;{searchQuery}&quot;
-                      </div>
-                      <div className="text-xs text-[var(--viewer-subtle-text)]">
-                        ({mixedItems.length} result
-                        {mixedItems.length !== 1 ? "s" : ""} across all folders)
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === "my-uploads" ? (
-                  /* My Uploads tab - show all uploads across all folders */
-                  <ul role="list" className="-mx-4 space-y-4 overflow-auto p-4">
-                    {allUploads.length === 0 ? (
-                      <li className="py-6 text-center text-[var(--viewer-subtle-text)]">
-                        No uploads yet. Upload documents using the &quot;Add
-                        Document&quot; button.
-                      </li>
-                    ) : (
-                      allUploads.map((pendingUpload) => (
-                        <li key={pendingUpload.id}>
-                          <PendingDocumentCard
-                            pendingUpload={pendingUpload}
-                            folders={folders}
-                            linkId={linkId}
-                            showFolderPath
-                            onNavigateToFolder={(id) => {
-                              setFolderId(id);
-                              setActiveTab("documents");
-                            }}
-                          />
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                ) : cardLayout === "GRID" ? (
-                  <div className="-mx-4 space-y-4 overflow-auto p-4">
-                    {!searchQuery &&
-                      filteredPendingUploads.map((pendingUpload) => (
-                        <div key={pendingUpload.id}>
-                          <PendingDocumentCard
-                            pendingUpload={pendingUpload}
-                            linkId={linkId}
-                          />
-                        </div>
-                      ))}
-
-                    {mixedItems.length === 0 &&
-                    filteredPendingUploads.length === 0 ? (
-                      <div className="py-6 text-center text-[var(--viewer-subtle-text)]">
-                        {searchQuery
-                          ? "No documents match your search."
-                          : "No items available."}
-                      </div>
-                    ) : (
-                      segmentMixedItemsForGrid(mixedItems).map((run, runIdx) => (
-                        <ul
-                          key={runIdx}
-                          role="list"
-                          className={
-                            run.kind === "folder"
-                              ? folderGridListClassName
-                              : documentGridListClassName
-                          }
+                    {showPoweredByBanner ? (
+                      <footer className="shrink-0 px-3 md:px-6 lg:px-8 xl:px-14">
+                        <div
+                          className="border-t py-3"
+                          style={{
+                            borderColor:
+                              viewerSurfaceTheme.palette.panelBorderColor,
+                          }}
                         >
-                          {run.items.map((item) => (
-                            <li key={item.id}>{renderItem(item)}</li>
-                          ))}
-                        </ul>
-                      ))
-                    )}
-                  </div>
-                ) : (
-                  /* Documents tab — list / compact layouts */
-                  <div
-                    className={cn(
-                      cardLayout === "COMPACT" &&
-                        "mt-4 border-t border-[var(--viewer-panel-border)]",
-                    )}
-                  >
-                    {cardLayout === "COMPACT" ? (
-                      <CompactDataroomListHeader
-                        showUpdatedColumn={compactTableShowUpdated}
-                        showSettingsColumn={compactListShowsActionsColumn}
-                        showIndexColumn
-                      />
+                          <div className="flex items-center justify-between gap-4 text-xs text-[var(--viewer-subtle-text)]">
+                            <span className="truncate">
+                              &copy; {new Date().getFullYear()}
+                              {dataroom?.name ? ` ${dataroom.name}` : ""}
+                            </span>
+                            <a
+                              href={`https://www.papermark.com?utm_campaign=poweredby&utm_medium=poweredby&utm_source=papermark-${linkId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="whitespace-nowrap transition-colors hover:text-[var(--viewer-text)]"
+                            >
+                              {t("shell.secureFooter", "Secured by")}{" "}
+                              <span className="font-semibold tracking-tight">
+                                Papermark
+                              </span>
+                            </a>
+                          </div>
+                        </div>
+                      </footer>
                     ) : null}
-                    <ul role="list" className={itemListClassName}>
-                      {!searchQuery &&
-                        filteredPendingUploads.map((pendingUpload) => (
-                          <li key={pendingUpload.id}>
-                            <PendingDocumentCard
-                              pendingUpload={pendingUpload}
-                              linkId={linkId}
-                            />
-                          </li>
-                        ))}
-
-                      {mixedItems.length === 0 &&
-                      filteredPendingUploads.length === 0 ? (
-                        <li className="py-6 text-center text-[var(--viewer-subtle-text)]">
-                          {searchQuery
-                            ? "No documents match your search."
-                            : "No items available."}
-                        </li>
-                      ) : (
-                        mixedItems.map((item, idx) => (
-                          <li key={item.id}>{renderItem(item, idx)}</li>
-                        ))
-                      )}
-                    </ul>
                   </div>
-                )}
-
-              </div>
-            </div>
-          </div>
-          {showPoweredByBanner ? (
-            <footer className="shrink-0 px-3 md:px-6 lg:px-8 xl:px-14">
-              <div
-                className="border-t py-3"
-                style={{
-                  borderColor:
-                    viewerSurfaceTheme.palette.panelBorderColor,
-                }}
-              >
-                <div className="flex items-center justify-between gap-4 text-xs text-[var(--viewer-subtle-text)]">
-                  <span className="truncate">
-                    &copy; {new Date().getFullYear()}
-                    {dataroom?.name ? ` ${dataroom.name}` : ""}
-                  </span>
-                  <a
-                    href={`https://www.papermark.com?utm_campaign=poweredby&utm_medium=poweredby&utm_source=papermark-${linkId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="whitespace-nowrap transition-colors hover:text-[var(--viewer-text)]"
-                  >
-                    Secured by{" "}
-                    <span className="font-semibold tracking-tight">
-                      Papermark
-                    </span>
-                  </a>
                 </div>
-              </div>
-            </footer>
-          ) : null}
-          </div>
-          </div>
-        </ViewerChatLayout>
-      </ViewerSurfaceThemeProvider>
+              </ConversationSidebarLayout>
+            </ViewerChatLayout>
+          </ViewerSurfaceThemeProvider>
 
-      {/* AI Chat Components */}
-      <ViewerChatPanel />
-      <ViewerChatToggle />
-      </ViewerChatProvider>
+          {/* AI Chat Components */}
+          <ViewerChatPanel />
+          <ViewerChatToggle />
+        </ViewerChatProvider>
+      </ConversationSidebarProvider>
     </IntroductionProvider>
   );
 }

@@ -1,4 +1,7 @@
-import { formatDate } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
+
+import { formatDateLocalized } from "@/lib/i18n/format";
+import { asSupportedLocale, DEFAULT_LOCALE } from "@/lib/i18n/locales";
 import { cn } from "@/lib/utils";
 
 import { useViewerSurfaceTheme } from "@/components/view/viewer/viewer-surface-theme";
@@ -15,6 +18,8 @@ export function DataroomNoBannerTitle({
   className?: string;
 }) {
   const { usesLightText, palette } = useViewerSurfaceTheme();
+  const { t, i18n } = useTranslation("dataroom");
+  const activeLocale = asSupportedLocale(i18n.language) ?? DEFAULT_LOCALE;
 
   return (
     <div className={cn("min-w-0", className)}>
@@ -38,7 +43,9 @@ export function DataroomNoBannerTitle({
             usesLightText ? { color: palette.mutedTextColor } : undefined
           }
         >
-          {`Last updated ${formatDate(new Date(lastUpdatedAt).toISOString())}`}
+          {t("shell.lastUpdated", "Last updated {{date}}", {
+            date: formatDateLocalized(lastUpdatedAt, activeLocale),
+          })}
         </time>
       ) : null}
     </div>

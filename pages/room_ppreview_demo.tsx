@@ -1,14 +1,20 @@
-import { useRouter } from "next/router";
-
 import { type CSSProperties, type ReactNode, useMemo, useState } from "react";
 
 import {
   type DataroomCardLayout,
   type DataroomViewerHeaderStyle,
 } from "@/ee/features/branding/lib/dataroom-viewer-layout";
+import { useBrandingPreviewParams } from "@/ee/features/branding/lib/use-branding-preview-params";
+import { resolveBrandLogo } from "@/ee/features/branding/lib/brand-logo";
 
 import { PlayIcon } from "lucide-react";
 
+import {
+  buildViewerI18nPageProps,
+  type ViewerI18nPageProps,
+} from "@/lib/i18n/viewer-page-props";
+
+import { ViewerI18nProvider } from "@/components/view/viewer-i18n-provider";
 import { ViewFolderTree } from "@/components/datarooms/folders";
 import {
   Breadcrumb,
@@ -19,6 +25,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { cn } from "@/lib/utils";
+import { determineTextColor } from "@/lib/utils/determine-text-color";
 import { useLogoTone } from "@/ee/features/branding/lib/use-logo-tone";
 import { classifyDataroomBanner } from "@/ee/features/branding/lib/dataroom-banner";
 import { getDataroomPreviewDataset } from "@/ee/features/branding/lib/dataroom-preview-presets";
@@ -185,11 +192,12 @@ function VideoBannerPreview({
 }
 
 /** Preview iframe: align with dataroom viewer (sharp corners, optional folder tree). */
-export default function ViewPage() {
-  const router = useRouter();
-  const [previewFolderId, setPreviewFolderId] = useState<string | null>(null);
+export default function ViewPage({ i18n }: ViewerI18nPageProps) {
+  // Seeded from the URL on first paint, then live-updated over postMessage so
+  // the editor never has to reload (and therefore never flashes) this iframe.
   const {
     brandLogo,
+    hideLogo,
     brandColor,
     brandBanner,
     accentColor,
@@ -201,20 +209,12 @@ export default function ViewPage() {
     accentButtonColor,
     viewerHeaderStyle: viewerHeaderStyleParam,
     hideFolderIconsInMain: hideFolderIconsMainParam,
-  } = router.query as {
-    brandLogo?: string;
-    brandColor?: string;
-    brandBanner?: string;
-    accentColor?: string;
-    applyAccentColorToDataroomView?: string;
-    cardLayout?: string;
-    showFolderTree?: string;
-    ctaLabel?: string;
-    ctaUrl?: string;
-    accentButtonColor?: string;
-    viewerHeaderStyle?: string;
-    hideFolderIconsInMain?: string;
-  };
+  } = useBrandingPreviewParams();
+  const resolvedBrandLogo = resolveBrandLogo({
+    logo: brandLogo || null,
+    hideLogo: hideLogo === "1",
+  });
+  const [previewFolderId, setPreviewFolderId] = useState<string | null>(null);
 
   // Always the same "Example Virtual Data Room" — keeps the preview consistent
   // across pages and avoids depending on per-team onboarding answers.
@@ -319,29 +319,119 @@ export default function ViewPage() {
   const compactPreviewShowUpdated = cardLayout === "COMPACT";
   const compactPreviewShowActions = false;
 
-  const renderPrimaryLogo = () =>
-    brandLogo ? (
-      <img
-        className="h-10 w-28 object-contain sm:h-12 sm:w-32"
-        src={brandLogo}
-        alt="Logo"
-      />
-    ) : (
-      <div className="text-2xl font-bold tracking-tighter text-white">
-        Papermark
-      </div>
-    );
+  const renderPrimaryLogo = (forLightBackground?: boolean) => {
+    switch (resolvedBrandLogo.kind) {
+      case "custom":
+        return (
+          <img
+            className="h-10 w-28 object-contain sm:h-12 sm:w-32"
+            src={resolvedBrandLogo.src}
+            alt="Logo"
+          />
+        );
+      case "papermark":
+        return (
+          <div
+            className={cn(
+              "text-2xl font-bold tracking-tighter",
+              forLightBackground
+                ? "text-neutral-900 dark:text-white"
+                : "text-white",
+            )}
+          >
+            Papermark
+          </div>
+        );
+      case "none":
+        return null;
+      default: {
+        const _exhaustive: never = resolvedBrandLogo;
+        return _exhaustive;
+      }
+    }
+  };
+
+  // Without a chip the negative top margin would pull the dataroom name up
+  // over the cover image, so the "none" case drops the overlap entirely.
+  const notionLogo = (() => {
+    const overlapping = {
+      containerClassName:
+        "-mt-10 relative z-10 flex w-full flex-col items-start text-left sm:-mt-12",
+      titleClassName: "mt-4 max-w-3xl text-3xl",
+    };
+    switch (resolvedBrandLogo.kind) {
+      case "custom":
+        return {
+          ...overlapping,
+          // Notion cover logo chip: adaptive background based on the logo's
+          // averaged luminance — dark logos sit in a white box, light/white
+          // logos sit in a black box so they're always visible regardless of
+          // brand colors.
+          chip: (
+            <PreviewNotionLogoChip
+              src={resolvedBrandLogo.src}
+              shouldApplyAccent={shouldApplyAccentToDataroomView}
+              surfacePanelBorderColor={
+                previewSurfaceTheme.palette.panelBorderColor
+              }
+            />
+          ),
+        };
+      case "papermark":
+        return {
+          ...overlapping,
+          chip: (
+            <div
+              className={cn(
+                "flex size-16 items-center justify-center rounded-xl border text-sm font-semibold sm:size-20",
+                shouldApplyAccentToDataroomView
+                  ? ""
+                  : "border-neutral-200 bg-neutral-900 text-white dark:border-neutral-700 dark:bg-white dark:text-neutral-950",
+              )}
+              style={
+                shouldApplyAccentToDataroomView
+                  ? {
+                      backgroundColor: previewSurfaceTheme.palette.ctaBgColor,
+                      color: previewSurfaceTheme.palette.ctaTextColor,
+                      borderColor: previewSurfaceTheme.palette.panelBorderColor,
+                    }
+                  : undefined
+              }
+            >
+              EX
+            </div>
+          ),
+        };
+      case "none":
+        return {
+          chip: null,
+          containerClassName:
+            "relative z-10 flex w-full flex-col items-start text-left",
+          titleClassName: "max-w-3xl text-3xl",
+        };
+      default: {
+        const _exhaustive: never = resolvedBrandLogo;
+        return _exhaustive;
+      }
+    }
+  })();
 
   return (
-    <div
-      className="min-h-screen bg-white"
-      style={
-        {
-          backgroundColor: dataroomViewBackgroundColor,
-        } as CSSProperties
-      }
-    >
-      {/* Header — matches live viewer modes */}
+    // The cards below call `useTranslation` — without an initialized i18n
+    // instance they'd render the raw `Updated {{when}}` template on the client
+    // while the server interpolates it, tripping a hydration mismatch. Wrapping
+    // the tree in the same provider the live viewer uses keeps both sides in
+    // lockstep.
+    <ViewerI18nProvider locale={i18n.locale} resources={i18n.resources}>
+      <div
+        className="min-h-screen bg-white"
+        style={
+          {
+            backgroundColor: dataroomViewBackgroundColor,
+          } as CSSProperties
+        }
+      >
+        {/* Header — matches live viewer modes */}
       <nav
         className={cn(
           headerMode === "SPLIT"
@@ -393,45 +483,10 @@ export default function ViewPage() {
               }
             >
               <div className={cn(DATAROOM_NAV_PAGE_FRAME, "pb-10 pt-2")}>
-                <div className="-mt-10 relative z-10 flex w-full flex-col items-start text-left sm:-mt-12">
-                  {brandLogo ? (
-                    // Notion cover logo chip: adaptive background based on the
-                    // logo's averaged luminance — dark logos sit in a white
-                    // box, light/white logos sit in a black box so they're
-                    // always visible regardless of brand colors.
-                    <PreviewNotionLogoChip
-                      src={brandLogo}
-                      shouldApplyAccent={shouldApplyAccentToDataroomView}
-                      surfacePanelBorderColor={
-                        previewSurfaceTheme.palette.panelBorderColor
-                      }
-                    />
-                  ) : (
-                    <div
-                      className={cn(
-                        "flex size-16 items-center justify-center rounded-xl border text-sm font-semibold sm:size-20",
-                        shouldApplyAccentToDataroomView
-                          ? ""
-                          : "border-neutral-200 bg-neutral-900 text-white dark:border-neutral-700 dark:bg-white dark:text-neutral-950",
-                      )}
-                      style={
-                        shouldApplyAccentToDataroomView
-                          ? {
-                              backgroundColor:
-                                previewSurfaceTheme.palette.ctaBgColor,
-                              color:
-                                previewSurfaceTheme.palette.ctaTextColor,
-                              borderColor:
-                                previewSurfaceTheme.palette.panelBorderColor,
-                            }
-                          : undefined
-                      }
-                    >
-                      EX
-                    </div>
-                  )}
+                <div className={notionLogo.containerClassName}>
+                  {notionLogo.chip}
                   <div
-                    className="mt-4 max-w-3xl text-3xl"
+                    className={notionLogo.titleClassName}
                     style={
                       shouldApplyAccentToDataroomView
                         ? { color: previewSurfaceTheme.palette.textColor }
@@ -459,17 +514,7 @@ export default function ViewPage() {
             <div className={cn(DATAROOM_NAV_PAGE_FRAME, "pt-4")}>
               <div className="flex items-center justify-between gap-2 border-b border-[var(--viewer-panel-border)] pb-2">
                 <div className="relative flex min-h-14 shrink-0 items-center">
-                  {brandLogo ? (
-                    <img
-                      className="h-10 w-28 object-contain sm:h-12 sm:w-32"
-                      src={brandLogo}
-                      alt="Logo"
-                    />
-                  ) : (
-                    <div className="text-2xl font-bold tracking-tighter text-neutral-900 dark:text-white">
-                      Papermark
-                    </div>
-                  )}
+                  {renderPrimaryLogo(true)}
                 </div>
                 <div className="flex min-w-0 shrink items-center justify-end gap-2">
                   {showNavCta ? (
@@ -477,10 +522,13 @@ export default function ViewPage() {
                       href={ctaUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex shrink-0 items-center justify-center rounded-md px-4 py-2 text-sm font-medium text-white"
+                      className="inline-flex shrink-0 items-center justify-center rounded-md px-4 py-2 text-sm font-medium"
                       style={{
                         backgroundColor:
                           accentButtonColor || brandColor || "#111827",
+                        color: determineTextColor(
+                          accentButtonColor || brandColor || "#111827",
+                        ),
                       }}
                     >
                       {ctaLabel}
@@ -600,11 +648,13 @@ export default function ViewPage() {
                     href={ctaUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white"
+                    className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium"
                     style={{
                       backgroundColor:
                         accentButtonColor || brandColor || "#ffffff",
-                      color: accentButtonColor ? "#ffffff" : "#000000",
+                      color: determineTextColor(
+                        accentButtonColor || brandColor || "#ffffff",
+                      ),
                     }}
                   >
                     {ctaLabel}
@@ -878,6 +928,18 @@ export default function ViewPage() {
           </div>
         </div>
       </ViewerSurfaceThemeProvider>
-    </div>
+      </div>
+    </ViewerI18nProvider>
   );
 }
+
+/**
+ * Load the viewer translation bundles at build time so the preview iframe
+ * renders translated card copy identically on the server and the client. We
+ * always use the default locale here — the branding preview isn't a live
+ * visitor surface, so there's no per-brand language to resolve.
+ */
+export const getStaticProps = async () => {
+  const props = await buildViewerI18nPageProps(null);
+  return { props };
+};

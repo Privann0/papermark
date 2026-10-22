@@ -77,16 +77,33 @@ const tusServer = new Server({
         typeof tusError.status_code === "number" &&
         typeof tusError.body === "string"
       ) {
-        const errorResponse: TusErrorResponse = {
+        return {
           status_code: tusError.status_code,
           body: tusError.body,
-        };
-        return errorResponse;
+        } satisfies TusErrorResponse;
       }
     }
 
+    const e = err as
+      | (Error & { cause?: unknown; code?: unknown; $metadata?: unknown })
+      | undefined;
+
+    console.error("[tus] upload error", {
+      url: req.url,
+      method: req.method,
+      name: e?.name,
+      message: e?.message,
+      code: e?.code,
+      cause: e?.cause,
+      awsMetadata: e?.$metadata,
+      stack: e?.stack,
+    });
+
     log({
-      message: "Error uploading a file. Error: \n\n" + err,
+      message:
+        `Error uploading a file. ${e?.name ?? "Unknown"}: ${e?.message ?? String(err)}` +
+        (e?.code ? ` (code: ${String(e.code)})` : "") +
+        (e?.stack ? `\n\n\`\`\`\n${e.stack}\n\`\`\`` : ""),
       type: "error",
     });
     return { status_code: 500, body: "Internal Server Error" };
@@ -262,6 +279,17 @@ const tusServer = new Server({
 
       return res;
     } catch (error) {
+      const e = error as
+        | (Error & { code?: unknown; $metadata?: unknown })
+        | undefined;
+      console.error("[tus] onUploadFinish error", {
+        uploadId: upload.id,
+        name: e?.name,
+        message: e?.message,
+        code: e?.code,
+        awsMetadata: e?.$metadata,
+        stack: e?.stack,
+      });
       throw { status_code: 500, body: "Error updating metadata" };
     }
   },
@@ -271,14 +299,32 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
-  // Get the session
-  const session = await getServerSession(req, res, authOptions);
-  const userId = (session?.user as CustomUser | undefined)?.id;
-  if (!userId) {
-    return res.status(401).json({ message: "Unauthorized" });
+  try {
+    const session = await getServerSession(req, res, authOptions);
+    const userId = (session?.user as CustomUser | undefined)?.id;
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    (req as TusAuthenticatedRequest).papermarkUserId = userId;
+
+    return await tusServer.handle(req, res);
+  } catch (error) {
+    const e = error as
+      | (Error & { cause?: unknown; code?: unknown; $metadata?: unknown })
+      | undefined;
+    console.error("[tus] handler crash", {
+      url: req.url,
+      method: req.method,
+      name: e?.name,
+      message: e?.message,
+      code: e?.code,
+      cause: e?.cause,
+      awsMetadata: e?.$metadata,
+      stack: e?.stack,
+    });
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Internal Server Error" });
+    }
   }
-
-  (req as TusAuthenticatedRequest).papermarkUserId = userId;
-
-  return tusServer.handle(req, res);
 }

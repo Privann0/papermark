@@ -51,11 +51,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ButtonTooltip } from "@/components/ui/tooltip";
 
+import AllowNotificationSection from "./allow-notification-section";
 import { CustomFieldData } from "./custom-fields-panel";
 import { type ItemPermission } from "./dataroom-link-sheet";
 import DomainSection from "./domain-section";
 import { LinkOptions } from "./link-options";
-import TagSection from "./tags/tag-section";
+import InlineTagSelector from "./tags/inline-tag-selector";
 
 export const DEFAULT_LINK_PROPS = (
   linkType: Omit<LinkType, "WORKFLOW_LINK">,
@@ -77,12 +78,15 @@ export const DEFAULT_LINK_PROPS = (
   enableNotification: true,
   enableFeedback: false,
   enableScreenshotProtection: false,
-    enableCustomMetatag: false,
+  enableConfidentialView: false,
+  enableCustomMetatag: false,
   metaTitle: null,
   metaDescription: null,
   metaImage: null,
   metaFavicon: null,
   welcomeMessage: null,
+  brandId: null,
+  dataroomBrandId: null,
   enableQuestion: false,
   questionText: null,
   questionType: null,
@@ -122,12 +126,15 @@ export type DEFAULT_LINK_TYPE = {
   enableNotification: boolean;
   enableFeedback: boolean;
   enableScreenshotProtection: boolean;
+  enableConfidentialView: boolean;
   enableCustomMetatag: boolean; // metatags
   metaTitle: string | null; // metatags
   metaDescription: string | null; // metatags
   metaImage: string | null; // metatags
   metaFavicon: string | null; // metaFavicon
   welcomeMessage: string | null; // custom welcome message
+  brandId: string | null;
+  dataroomBrandId: string | null;
   enableQuestion?: boolean; // feedback question
   questionText: string | null;
   questionType: string | null;
@@ -205,34 +212,33 @@ export default function LinkSheet({
   >({});
   const formRef = useRef<HTMLFormElement>(null);
 
-  const setValidationError = useCallback(
-    (key: string, errors: string[]) => {
-      setValidationErrors((prev) => {
-        const hasErrors = errors.length > 0;
-        const wasPresent = key in prev;
-        if (!hasErrors && !wasPresent) return prev;
-        if (!hasErrors && wasPresent) {
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        }
-        const previous = prev[key];
-        if (
-          previous &&
-          previous.length === errors.length &&
-          previous.every((value, index) => value === errors[index])
-        ) {
-          return prev;
-        }
-        return { ...prev, [key]: errors };
-      });
-    },
-    [],
-  );
+  const setValidationError = useCallback((key: string, errors: string[]) => {
+    setValidationErrors((prev) => {
+      const hasErrors = errors.length > 0;
+      const wasPresent = key in prev;
+      if (!hasErrors && !wasPresent) return prev;
+      if (!hasErrors && wasPresent) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      const previous = prev[key];
+      if (
+        previous &&
+        previous.length === errors.length &&
+        previous.every((value, index) => value === errors[index])
+      ) {
+        return prev;
+      }
+      return { ...prev, [key]: errors };
+    });
+  }, []);
 
   const validationErrorEntries = useMemo(
     () =>
-      Object.entries(validationErrors).filter(([, errors]) => errors.length > 0),
+      Object.entries(validationErrors).filter(
+        ([, errors]) => errors.length > 0,
+      ),
     [validationErrors],
   );
   const hasValidationErrors = validationErrorEntries.length > 0;
@@ -242,9 +248,7 @@ export default function LinkSheet({
       allowList: "Allow specified viewers",
       denyList: "Block specified viewers",
     };
-    return validationErrorEntries
-      .map(([key]) => labels[key] ?? key)
-      .join(", ");
+    return validationErrorEntries.map(([key]) => labels[key] ?? key).join(", ");
   }, [validationErrorEntries]);
 
   const isPresetsAllowed =
@@ -354,6 +358,8 @@ export default function LinkSheet({
         agreementId: preset.agreementId || prev.agreementId,
         enableScreenshotProtection:
           preset.enableScreenshotProtection || prev.enableScreenshotProtection,
+        enableConfidentialView:
+          preset.enableConfidentialView ?? prev.enableConfidentialView,
         enableNotification: !!preset.enableNotification,
         showBanner: preset.showBanner ?? prev.showBanner,
       };
@@ -371,9 +377,7 @@ export default function LinkSheet({
     }
 
     if (hasValidationErrors) {
-      toast.error(
-        `Fix invalid emails or domains in: ${validationErrorLabel}`,
-      );
+      toast.error(`Fix invalid emails or domains in: ${validationErrorLabel}`);
       return;
     }
 
@@ -522,6 +526,7 @@ export default function LinkSheet({
         "enableNotification",
         "enableFeedback",
         "enableScreenshotProtection",
+        "enableConfidentialView",
         "enableCustomMetatag",
         "metaTitle",
         "metaDescription",
@@ -667,13 +672,18 @@ export default function LinkSheet({
 
   return (
     <Sheet open={isOpen} onOpenChange={(open: boolean) => setIsOpen(open)}>
-      <SheetContent className="flex w-[90%] flex-col justify-between border-l border-gray-200 bg-background px-4 text-foreground dark:border-gray-800 dark:bg-gray-900 sm:w-[800px] sm:max-w-4xl md:px-5">
+      <SheetContent
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        className="flex w-[90%] flex-col justify-between border-l border-gray-200 bg-background px-4 text-foreground dark:border-gray-800 dark:bg-gray-900 sm:w-[800px] sm:max-w-4xl md:px-5"
+      >
         <SheetHeader className="text-start">
-          <SheetTitle>
-            {currentLink
-              ? `Edit ${currentLink.audienceType === LinkAudienceType.GROUP ? "group" : ""} link`
-              : "Create a new link"}
-          </SheetTitle>
+          <div className="flex items-center justify-between gap-4 pr-8">
+            <SheetTitle>
+              {currentLink
+                ? `Edit ${currentLink.audienceType === LinkAudienceType.GROUP ? "group" : ""} link`
+                : "Create a new link"}
+            </SheetTitle>
+          </div>
         </SheetHeader>
 
         <form
@@ -720,7 +730,45 @@ export default function LinkSheet({
                       {/* GENERAL LINK */}
                       <div className="space-y-6 pt-2">
                         <div className="space-y-2">
-                          <Label htmlFor="link-name">Link Name</Label>
+                          <div className="flex items-center justify-between gap-2">
+                            <Label htmlFor="link-name">Link name</Label>
+                            <div className="flex items-center gap-2">
+                              {/* Preset selector - compact, only when creating a
+                                  new link and presets are available */}
+                              {!currentLink &&
+                                isPresetsAllowed &&
+                                presets &&
+                                presets.length > 0 && (
+                                  <Select onValueChange={applyPreset}>
+                                    <SelectTrigger className="flex h-8 w-[150px] rounded-md border border-input bg-white text-foreground placeholder-muted-foreground focus:border-muted-foreground focus:outline-none focus:ring-inset focus:ring-muted-foreground dark:border-gray-500 dark:bg-gray-800 focus:dark:bg-transparent sm:text-sm">
+                                      <SelectValue placeholder="Apply a preset" />
+                                    </SelectTrigger>
+                                    <SelectContent className="rounded-md border border-input bg-white text-foreground dark:border-gray-500 dark:bg-gray-800 sm:text-sm">
+                                      {presets.map((preset) => (
+                                        <SelectItem
+                                          key={preset.id}
+                                          value={preset.id}
+                                          className="hover:bg-muted hover:dark:bg-gray-700"
+                                        >
+                                          {preset.name}
+                                        </SelectItem>
+                                      ))}
+                                      <Separator className="my-1" />
+                                      <Link
+                                        href="/settings/presets"
+                                        className="flex items-center rounded-sm px-2 py-1.5 text-xs text-muted-foreground outline-none hover:bg-muted hover:text-foreground hover:dark:bg-gray-700"
+                                      >
+                                        Manage presets
+                                      </Link>
+                                    </SelectContent>
+                                  </Select>
+                                )}
+                              <InlineTagSelector
+                                {...{ data, setData }}
+                                teamId={teamInfo?.currentTeam?.id as string}
+                              />
+                            </div>
+                          </div>
                           <Input
                             type="text"
                             name="link-name"
@@ -742,48 +790,11 @@ export default function LinkSheet({
                           />
                         </div>
 
-                        {/* Preset Selector - only show when creating a new link */}
-                        {!currentLink &&
-                          isPresetsAllowed &&
-                          presets &&
-                          presets.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <Label htmlFor="preset">Link Preset</Label>
-                                <Link
-                                  href="/settings/presets"
-                                  className="text-xs text-muted-foreground hover:text-foreground hover:underline"
-                                >
-                                  Manage
-                                </Link>
-                              </div>
-                              <Select onValueChange={applyPreset}>
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="Select a preset" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {presets.map((preset) => (
-                                    <SelectItem
-                                      key={preset.id}
-                                      value={preset.id}
-                                    >
-                                      {preset.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <p className="text-xs text-muted-foreground">
-                                Apply a preset to quickly configure link
-                                settings
-                              </p>
-                            </div>
-                          )}
-
                         <div className="relative flex items-center">
                           <Separator className="absolute bg-muted-foreground" />
                           <div className="relative mx-auto">
                             <span className="bg-background px-2 text-sm text-muted-foreground dark:bg-gray-900">
-                              Link Options
+                              Security controls
                             </span>
                           </div>
                         </div>
@@ -796,6 +807,7 @@ export default function LinkSheet({
                           editLink={!!currentLink}
                           currentPreset={currentPreset}
                           setValidationError={setValidationError}
+                          dataroomStyle
                         />
                       </div>
                     </TabsContent>
@@ -860,7 +872,45 @@ export default function LinkSheet({
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="link-name">Link Name</Label>
+                          <div className="flex items-center justify-between gap-2">
+                            <Label htmlFor="link-name">Link name</Label>
+                            <div className="flex items-center gap-2">
+                              {/* Preset selector - compact, only when creating a
+                                  new link and presets are available */}
+                              {!currentLink &&
+                                isPresetsAllowed &&
+                                presets &&
+                                presets.length > 0 && (
+                                  <Select onValueChange={applyPreset}>
+                                    <SelectTrigger className="flex h-8 w-[150px] rounded-md border border-input bg-white text-foreground placeholder-muted-foreground focus:border-muted-foreground focus:outline-none focus:ring-inset focus:ring-muted-foreground dark:border-gray-500 dark:bg-gray-800 focus:dark:bg-transparent sm:text-sm">
+                                      <SelectValue placeholder="Apply a preset" />
+                                    </SelectTrigger>
+                                    <SelectContent className="rounded-md border border-input bg-white text-foreground dark:border-gray-500 dark:bg-gray-800 sm:text-sm">
+                                      {presets.map((preset) => (
+                                        <SelectItem
+                                          key={preset.id}
+                                          value={preset.id}
+                                          className="hover:bg-muted hover:dark:bg-gray-700"
+                                        >
+                                          {preset.name}
+                                        </SelectItem>
+                                      ))}
+                                      <Separator className="my-1" />
+                                      <Link
+                                        href="/settings/presets"
+                                        className="flex items-center rounded-sm px-2 py-1.5 text-xs text-muted-foreground outline-none hover:bg-muted hover:text-foreground hover:dark:bg-gray-700"
+                                      >
+                                        Manage presets
+                                      </Link>
+                                    </SelectContent>
+                                  </Select>
+                                )}
+                              <InlineTagSelector
+                                {...{ data, setData }}
+                                teamId={teamInfo?.currentTeam?.id as string}
+                              />
+                            </div>
+                          </div>
 
                           <Input
                             type="text"
@@ -893,48 +943,11 @@ export default function LinkSheet({
                           />
                         </div>
 
-                        {/* Preset Selector for Group links - only show when creating a new link */}
-                        {!currentLink &&
-                          isPresetsAllowed &&
-                          presets &&
-                          presets.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                <Label htmlFor="preset">Link Preset</Label>
-                                <Link
-                                  href="/settings/presets"
-                                  className="text-xs text-muted-foreground hover:text-foreground hover:underline"
-                                >
-                                  Manage
-                                </Link>
-                              </div>
-                              <Select onValueChange={applyPreset}>
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder="Select a preset" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {presets.map((preset) => (
-                                    <SelectItem
-                                      key={preset.id}
-                                      value={preset.id}
-                                    >
-                                      {preset.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <p className="text-xs text-muted-foreground">
-                                Apply a preset to quickly configure link
-                                settings
-                              </p>
-                            </div>
-                          )}
-
                         <div className="relative flex items-center">
                           <Separator className="absolute bg-muted-foreground" />
                           <div className="relative mx-auto">
                             <span className="bg-background px-2 text-sm text-muted-foreground dark:bg-gray-900">
-                              Link Options
+                              Security controls
                             </span>
                           </div>
                         </div>
@@ -947,18 +960,18 @@ export default function LinkSheet({
                           editLink={!!currentLink}
                           currentPreset={currentPreset}
                           setValidationError={setValidationError}
+                          dataroomStyle
                         />
                       </div>
                     </TabsContent>
                   </Tabs>
                 </div>
 
-                <Separator className="mb-6 mt-2" />
-
-                <div className="space-y-2">
-                  <TagSection
+                <div className="mt-4 border-t border-gray-200 pt-4 dark:border-gray-800">
+                  <AllowNotificationSection
                     {...{ data, setData }}
-                    teamId={teamInfo?.currentTeam?.id as string}
+                    title="Receive email notification for each link access"
+                    className=""
                   />
                 </div>
               </div>
@@ -979,7 +992,7 @@ export default function LinkSheet({
                   disabled={hasValidationErrors}
                   onClick={(e) => handleSubmit(e, false)}
                 >
-                  {currentLink ? "Update Link" : "Save Link"}
+                  {currentLink ? "Update link" : "Save link"}
                 </Button>
                 <Button
                   type="button"

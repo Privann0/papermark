@@ -1,17 +1,11 @@
 import prisma from "@/lib/prisma";
 
-import { SlackClient } from "./client";
+import { getSlackClient } from "./client";
 import { getSlackEnv } from "./env";
 import { createSlackMessage } from "./templates";
 import { SlackEventData, SlackIntegrationServer } from "./types";
 
 export class SlackEventManager {
-  private client: SlackClient;
-
-  constructor() {
-    this.client = new SlackClient();
-  }
-
   /**
    * Check if the viewer's email domain is in the team's ignored domains list
    */
@@ -67,10 +61,14 @@ export class SlackEventManager {
 
       // Check if the viewer's email domain is in the ignored domains list
       if (
-        this.isViewerDomainIgnored(eventData.viewerEmail, team?.ignoredDomains ?? null)
+        this.isViewerDomainIgnored(
+          eventData.viewerEmail,
+          team?.ignoredDomains ?? null,
+        )
       ) {
         // Log only the domain to avoid persisting PII
-        const redactedDomain = eventData.viewerEmail?.split("@").pop() ?? "unknown-domain";
+        const redactedDomain =
+          eventData.viewerEmail?.split("@").pop() ?? "unknown-domain";
         console.log(
           `Slack notification skipped for ignored domain: ${redactedDomain}`,
         );
@@ -111,7 +109,7 @@ export class SlackEventManager {
               ...message,
               channel: channel.id,
             };
-            await this.client.sendMessage(
+            await getSlackClient().sendMessage(
               integration.credentials.accessToken,
               slackMessage,
             );

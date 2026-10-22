@@ -1,7 +1,6 @@
 import { DataroomFolder, Document, DocumentVersion } from "@prisma/client";
 import ExcelJS from "exceljs";
 
-import { LinkWithDataroom } from "../types";
 import {
   DataroomIndex,
   DataroomIndexEntry,
@@ -38,6 +37,18 @@ interface DataroomDocumentWithVersion {
   };
 }
 
+export interface DataroomIndexSource {
+  id: string;
+  dataroom: {
+    id: string;
+    name: string;
+    createdAt: Date;
+    lastUpdatedAt: Date;
+    folders: DataroomFolder[];
+    documents: DataroomDocumentWithVersion[];
+  };
+}
+
 const formatBytes = (bytes: number): number => {
   if (bytes === 0) return 0;
   // Convert bytes to MB by dividing by 1024^2 (1MB = 1024 * 1024 bytes)
@@ -47,7 +58,7 @@ const formatBytes = (bytes: number): number => {
 };
 
 export async function generateDataroomIndex(
-  link: LinkWithDataroom,
+  link: DataroomIndexSource,
   options: GenerateIndexOptions = {},
 ): Promise<{ data: Buffer; filename: string; mimeType: string }> {
   const { format = "excel", baseUrl, showHierarchicalIndex = false } = options;

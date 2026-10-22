@@ -1,20 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { PageLink } from "@/lib/types/page-link";
+
 type PageData = {
   file: string | null;
   pageNumber: string;
   embeddedLinks: string[];
-  pageLinks: {
-    href: string;
-    coords: string;
-    isInternal?: boolean;
-    targetPage?: number;
-  }[];
-  metadata: { width: number; height: number; scaleFactor: number };
+  pageLinks?: PageLink[] | null;
+  metadata: { width: number; height: number; scaleFactor: number } | null;
 };
 
 type FetchPagesResponse = {
-  pages: { pageNumber: number; file: string }[];
+  pages: {
+    pageNumber: number;
+    file: string;
+    /**
+     * Re-signed overlay URLs for `pageLinks` of the requested page.
+     * Optional so older callers stay compatible.
+     */
+    pageLinks?: PageLink[];
+  }[];
 };
 
 type UseLazyPagesOptions = {
@@ -93,6 +98,9 @@ export function useLazyPages({
               updated[idx] = {
                 ...updated[idx],
                 file: fetchedPage.file,
+                ...(fetchedPage.pageLinks
+                  ? { pageLinks: fetchedPage.pageLinks }
+                  : {}),
               };
             }
           }

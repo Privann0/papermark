@@ -23,6 +23,26 @@ export const rateLimiters = {
     enableProtection: true,
     analytics: true,
   }),
+
+  // Compatibility reconstruction for bulk imports.
+  // Uses the same protection profile as the current core endpoints.
+  bulkLinkImport: new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(10, "20 m"),
+    prefix: "rl:bulk-link-import",
+    enableProtection: true,
+    analytics: true,
+  }),
+
+  // Compatibility reconstruction for domain verification.
+  // Scoped by user + team at the call site.
+  domainVerification: new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(10, "20 m"),
+    prefix: "rl:domain-verification",
+    enableProtection: true,
+    analytics: true,
+  }),
 };
 
 /**

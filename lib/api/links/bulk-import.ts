@@ -34,6 +34,7 @@ const LinkSchema = z
     allowDownload: z.boolean().optional(),
     enableNotification: z.boolean().optional(),
     enableScreenshotProtection: z.boolean().optional(),
+    enableConfidentialView: z.boolean().optional(),
     showBanner: z.boolean().optional(),
     allowList: z.array(z.string()).optional(),
     denyList: z.array(z.string()).optional(),
@@ -416,6 +417,8 @@ async function createLinkFromRow({
       enableNotification:
         row.enableNotification ?? preset?.enableNotification ?? false,
       enableScreenshotProtection: row.enableScreenshotProtection,
+      enableConfidentialView:
+        row.enableConfidentialView ?? preset?.enableConfidentialView,
       showBanner: row.showBanner ?? preset?.showBanner ?? false,
       allowList: row.allowList ?? preset?.allowList,
       denyList: row.denyList ?? preset?.denyList,

@@ -1,17 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConversationDocumentContext } from "@/ee/features/conversations/components/shared/conversation-document-context";
 import { ConversationMessage } from "@/ee/features/conversations/components/shared/conversation-message";
+import { useConversationSidebarSafe } from "@/ee/features/conversations/components/viewer/conversation-sidebar-provider";
 import { FAQSection } from "@/ee/features/conversations/components/viewer/faq-section";
 import { format } from "date-fns";
 import { ArrowLeftIcon, BellIcon, BellOffIcon, Plus } from "lucide-react";
 import { toast } from "sonner";
 import useSWR, { mutate } from "swr";
 
+import { MAX_MESSAGE_LENGTH } from "@/lib/constants";
 import { fetcher } from "@/lib/utils";
-import { MAX_MESSAGE_LENGTH } from "@/lib/utils/sanitize-html";
 
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -56,7 +57,9 @@ export type ConversationSidebarProps = {
   linkId: string;
   viewId: string;
   dataroomId?: string;
+  dataroomName?: string;
   documentId?: string;
+  documentName?: string;
   pageNumber?: number;
   viewerId?: string;
   isEnabled?: boolean;
@@ -80,6 +83,13 @@ export function ConversationViewSidebar({
   const [isNewConversationFormOpen, setIsNewConversationFormOpen] =
     useState(false);
   const [newMessage, setNewMessage] = useState("");
+
+  const conversationSidebar = useConversationSidebarSafe();
+  const setSidebarOpen = conversationSidebar?.setIsOpen;
+
+  useEffect(() => {
+    setSidebarOpen?.(isOpen);
+  }, [isOpen, setSidebarOpen]);
 
   // SWR hook for fetching conversations
   const {
@@ -205,7 +215,13 @@ export function ConversationViewSidebar({
   };
 
   return (
-    <Sheet open={isOpen} onOpenChange={onOpenChange}>
+    <Sheet
+      open={isOpen}
+      onOpenChange={(open) => {
+        setSidebarOpen?.(open);
+        onOpenChange?.(open);
+      }}
+    >
       <SheetContent side="right" className="p-0 sm:max-w-md">
         <div className="flex h-full flex-col">
           {/* Header */}

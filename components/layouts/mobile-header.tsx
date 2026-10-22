@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import {
   ChevronLeftIcon,
   CircleUserRound,
+  GiftIcon,
   LogOut,
   MailIcon,
 } from "lucide-react";

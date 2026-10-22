@@ -1,3 +1,9 @@
+import {
+  getDiscountCoupon,
+  getExpandedSubscriptionDiscount,
+  getSubscriptionPeriod,
+} from "@/ee/stripe/compat";
+
 import { stripeInstance } from "..";
 
 export interface SubscriptionDiscount {
@@ -15,30 +21,45 @@ export default async function getSubscriptionItem(
   isOldAccount: boolean,
 ) {
   const stripe = stripeInstance(isOldAccount);
+
   const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-    expand: ["discount.coupon"],
+    expand: ["discounts"],
   });
+
   const subscriptionItem = subscription.items.data[0];
 
-  // Extract discount information if available
+  if (!subscriptionItem) {
+    throw new Error(
+      `Stripe subscription ${subscription.id} has no subscription item`,
+    );
+  }
+
+  const period = getSubscriptionPeriod(subscription);
+
   let discount: SubscriptionDiscount | null = null;
-  if (subscription.discount && subscription.discount.coupon) {
-    const coupon = subscription.discount.coupon;
-    discount = {
-      couponId: coupon.id,
-      percentOff: coupon.percent_off || undefined,
-      amountOff: coupon.amount_off || undefined,
-      duration: coupon.duration,
-      durationInMonths: coupon.duration_in_months || undefined,
-      valid: coupon.valid,
-      end: subscription.discount.end || undefined,
-    };
+
+  const expandedDiscount = getExpandedSubscriptionDiscount(subscription);
+
+  if (expandedDiscount) {
+    const coupon = await getDiscountCoupon(stripe, expandedDiscount);
+
+    if (coupon) {
+      discount = {
+        couponId: coupon.id,
+        percentOff: coupon.percent_off ?? undefined,
+        amountOff: coupon.amount_off ?? undefined,
+        duration: coupon.duration,
+        durationInMonths: coupon.duration_in_months ?? undefined,
+        valid: coupon.valid,
+        end: expandedDiscount.end ?? undefined,
+      };
+    }
   }
 
   return {
     id: subscriptionItem.id,
-    currentPeriodStart: subscription.current_period_start,
-    currentPeriodEnd: subscription.current_period_end,
+    currentPeriodStart: period.start,
+    currentPeriodEnd: period.end,
     discount,
   };
 }
